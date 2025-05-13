@@ -6,6 +6,7 @@ from langchain_openai import ChatOpenAI
 from browser_use import Agent
 from browser_use.browser.browser import Browser, BrowserConfig, BrowserContextConfig
 
+
 load_dotenv()
 
 # video https://preview.screen.studio/share/vuq91Ej8

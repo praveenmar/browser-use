@@ -1,6 +1,6 @@
 import os
 import sys
-
+from langchain_google_genai import ChatGoogleGenerativeAI
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import asyncio
@@ -13,9 +13,8 @@ from browser_use import Agent
 load_dotenv()
 
 # Initialize the model
-llm = ChatOpenAI(
-	model='gpt-4o',
-	temperature=0.0,
+llm = ChatGoogleGenerativeAI(
+	model='gemini-2.0-flash-exp'
 )
 task = 'Go to kayak.com and find the cheapest flight from Zurich to San Francisco on 2025-05-01'
 

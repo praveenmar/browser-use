@@ -125,7 +125,7 @@ celerybeat.pid
 *.sage.py
 
 # Environments
-.env
+browser_use/.env
 .venv
 env/
 venv/
@@ -133,6 +133,8 @@ ENV/
 env.bak/
 venv.bak/
 test_env/
+browser-use/.env
+browser-use/.env.example
 
 
 # Spyder project settings
