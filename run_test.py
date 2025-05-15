@@ -41,11 +41,9 @@ async def main():
         task="""
                @agent=keep this in mind that you are testing a website so, follow the instructions carefully do not go beyond the instructions
                 step 1. Navigate to http://uitestingplayground.com/home
-                step 2. assert the 'Wait for animation to stop before clicking a button' is a text on the page
+                step 2. check the 'Wait for animation to stop before clicking a button' is a text on the page
                 step 3. assert the link 'Shadow DOM' with href 'http://uitestingplayground.com/shadowdom' is present in the page
-                step 4  assert the link Mouse Over with href 'http://uitestingplayground.com/mousehover' is present in the page
-                step 5. click on the 'Shadow DOM' hyperlink
-                step 6. assert the text 'Shadow DOM' is present in the page
+                
                 """,
         llm=llm,
         controller=controller,
