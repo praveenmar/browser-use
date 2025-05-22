@@ -2,6 +2,8 @@ import logging
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List
 from enum import Enum
+from patchright.async_api import expect, Page, Locator, TimeoutError as PlaywrightTimeoutError
+
 
 logger = logging.getLogger("test_framework.validation.assertion_module")
 
@@ -72,6 +74,18 @@ class VerificationContext:
     element_selector: Optional[str] = None
     attribute_name: Optional[str] = None
     action_result: Optional[Dict[str, Any]] = None
+    original_requirement: str = ""  # Original user requirement
+    validation_mode: ValidationMode = ValidationMode.EXACT  # Explicit validation mode
+    relaxed_mode: bool = False  # Flag for relaxed validation
+
+    def __post_init__(self):
+        """Validate and normalize the context after initialization"""
+        if not self.original_requirement:
+            raise ValueError("Original requirement must be provided")
+        
+        # Set validation mode based on relaxed_mode flag
+        if self.relaxed_mode:
+            self.validation_mode = ValidationMode.RELAXED
 
 class AssertionModule:
     def __init__(self):
@@ -143,11 +157,13 @@ class AssertionModule:
             # 2. Determine verification type
             assertion_type = self._determine_assertion_type(context.verification_step)
             
-            # 3. Log verification attempt
+            # 3. Log verification attempt with original requirement
             logger.info(f"🔍 Verifying {assertion_type.value} at step {context.step_number}")
+            logger.info(f"Original requirement: {context.original_requirement}")
             logger.debug(f"Action: {context.action_type}")
             logger.debug(f"Expected: '{context.expected_value}'")
             logger.debug(f"Actual: '{context.actual_value}'")
+            logger.debug(f"Validation mode: {context.validation_mode}")
             
             # 4. Get the appropriate handler
             handler = self.verification_handlers.get(assertion_type)
@@ -157,16 +173,19 @@ class AssertionModule:
             # 5. Perform verification
             result = await handler(context)
             
-            # 6. Log result
+            # 6. Log result with original requirement
             if result:
                 logger.info(f"✅ {assertion_type.value} verification passed at step {context.step_number}")
+                logger.info(f"Original requirement satisfied: {context.original_requirement}")
             else:
                 logger.error(f"❌ {assertion_type.value} verification failed at step {context.step_number}")
+                logger.error(f"Failed requirement: {context.original_requirement}")
             
             return result
 
         except Exception as e:
             logger.error(f"❌ Verification error at step {context.step_number}: {str(e)}")
+            logger.error(f"Failed requirement: {context.original_requirement}")
             raise
 
     def _validate_context(self, context: VerificationContext):
@@ -279,57 +298,160 @@ class AssertionModule:
 
     # Text Content Assertions
     async def _verify_text_visible(self, context: VerificationContext) -> bool:
-        return context.actual_value == context.expected_value
+        try:
+            if isinstance(context.actual_value, Locator):
+                await expect(context.actual_value).to_be_visible()
+                return True
+            return context.actual_value == context.expected_value
+        except PlaywrightTimeoutError:
+            return False
 
     async def _verify_text_contains(self, context: VerificationContext) -> bool:
-        return context.expected_value in context.actual_value
+        try:
+            if isinstance(context.actual_value, Locator):
+                text = await context.actual_value.text_content()
+                return context.expected_value in text
+            return context.expected_value in context.actual_value
+        except PlaywrightTimeoutError:
+            return False
 
     async def _verify_text_equals(self, context: VerificationContext) -> bool:
-        return context.actual_value == context.expected_value
+        try:
+            if isinstance(context.actual_value, Locator):
+                text = await context.actual_value.text_content()
+                return text == context.expected_value
+            return context.actual_value == context.expected_value
+        except PlaywrightTimeoutError:
+            return False
 
     async def _verify_text_not_present(self, context: VerificationContext) -> bool:
-        return context.expected_value not in context.actual_value
+        try:
+            if isinstance(context.actual_value, Locator):
+                text = await context.actual_value.text_content()
+                return context.expected_value not in text
+            return context.expected_value not in context.actual_value
+        except PlaywrightTimeoutError:
+            return True  # If element not found, text is not present
 
     # Element State Assertions
     async def _verify_element_visible(self, context: VerificationContext) -> bool:
-        return context.actual_value is True
+        try:
+            if isinstance(context.actual_value, Locator):
+                await expect(context.actual_value).to_be_visible()
+                return True
+            return context.actual_value is True
+        except PlaywrightTimeoutError:
+            return False
 
     async def _verify_element_hidden(self, context: VerificationContext) -> bool:
-        return context.actual_value is True
+        try:
+            if isinstance(context.actual_value, Locator):
+                await expect(context.actual_value).to_be_hidden()
+                return True
+            return context.actual_value is True
+        except PlaywrightTimeoutError:
+            return False
 
     async def _verify_element_enabled(self, context: VerificationContext) -> bool:
-        return context.actual_value is True
+        try:
+            if isinstance(context.actual_value, Locator):
+                await expect(context.actual_value).to_be_enabled()
+                return True
+            return context.actual_value is True
+        except PlaywrightTimeoutError:
+            return False
 
     async def _verify_element_disabled(self, context: VerificationContext) -> bool:
-        return context.actual_value is True
+        try:
+            if isinstance(context.actual_value, Locator):
+                await expect(context.actual_value).to_be_disabled()
+                return True
+            return context.actual_value is True
+        except PlaywrightTimeoutError:
+            return False
 
     async def _verify_element_exists(self, context: VerificationContext) -> bool:
-        return context.actual_value is True
+        try:
+            if isinstance(context.actual_value, Locator):
+                await expect(context.actual_value).to_be_attached()
+                return True
+            return context.actual_value is True
+        except PlaywrightTimeoutError:
+            return False
 
     async def _verify_element_selected(self, context: VerificationContext) -> bool:
-        return context.actual_value is True
+        try:
+            if isinstance(context.actual_value, Locator):
+                await expect(context.actual_value).to_be_checked()
+                return True
+            return context.actual_value is True
+        except PlaywrightTimeoutError:
+            return False
 
     async def _verify_element_focused(self, context: VerificationContext) -> bool:
-        return context.actual_value is True
+        try:
+            if isinstance(context.actual_value, Locator):
+                await expect(context.actual_value).to_be_focused()
+                return True
+            return context.actual_value is True
+        except PlaywrightTimeoutError:
+            return False
 
     async def _verify_element_clickable(self, context: VerificationContext) -> bool:
-        return context.actual_value is True
+        try:
+            if isinstance(context.actual_value, Locator):
+                await expect(context.actual_value).to_be_enabled()
+                await expect(context.actual_value).to_be_visible()
+                return True
+            return context.actual_value is True
+        except PlaywrightTimeoutError:
+            return False
 
     # Input Field Assertions
     async def _verify_input_value(self, context: VerificationContext) -> bool:
-        return context.actual_value == context.expected_value
+        try:
+            if isinstance(context.actual_value, Locator):
+                value = await context.actual_value.input_value()
+                return value == context.expected_value
+            return context.actual_value == context.expected_value
+        except PlaywrightTimeoutError:
+            return False
 
     async def _verify_input_empty(self, context: VerificationContext) -> bool:
-        return not context.actual_value
+        try:
+            if isinstance(context.actual_value, Locator):
+                value = await context.actual_value.input_value()
+                return not value
+            return not context.actual_value
+        except PlaywrightTimeoutError:
+            return False
 
     async def _verify_input_readonly(self, context: VerificationContext) -> bool:
-        return context.actual_value is True
+        try:
+            if isinstance(context.actual_value, Locator):
+                readonly = await context.actual_value.get_attribute("readonly")
+                return readonly is not None
+            return context.actual_value is True
+        except PlaywrightTimeoutError:
+            return False
 
     async def _verify_input_enabled(self, context: VerificationContext) -> bool:
-        return context.actual_value is True
+        try:
+            if isinstance(context.actual_value, Locator):
+                await expect(context.actual_value).to_be_enabled()
+                return True
+            return context.actual_value is True
+        except PlaywrightTimeoutError:
+            return False
 
     async def _verify_input_disabled(self, context: VerificationContext) -> bool:
-        return context.actual_value is True
+        try:
+            if isinstance(context.actual_value, Locator):
+                await expect(context.actual_value).to_be_disabled()
+                return True
+            return context.actual_value is True
+        except PlaywrightTimeoutError:
+            return False
 
     # URL and Navigation Assertions
     async def _verify_url_equals(self, context: VerificationContext) -> bool:
@@ -359,7 +481,13 @@ class AssertionModule:
 
     # State/Behavior Assertions
     async def _verify_element_becomes_visible(self, context: VerificationContext) -> bool:
-        return context.actual_value is True
+        try:
+            if isinstance(context.actual_value, Locator):
+                await expect(context.actual_value).to_be_visible()
+                return True
+            return context.actual_value is True
+        except PlaywrightTimeoutError:
+            return False
 
     async def _verify_element_count_equals(self, context: VerificationContext) -> bool:
         return int(context.actual_value) == int(context.expected_value)
