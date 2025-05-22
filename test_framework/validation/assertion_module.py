@@ -4,6 +4,7 @@ from typing import Optional, Dict, Any, List
 from enum import Enum
 from patchright.async_api import expect, Page, Locator, TimeoutError as PlaywrightTimeoutError
 
+
 logger = logging.getLogger("test_framework.validation.assertion_module")
 
 class AssertionType(Enum):
@@ -73,6 +74,18 @@ class VerificationContext:
     element_selector: Optional[str] = None
     attribute_name: Optional[str] = None
     action_result: Optional[Dict[str, Any]] = None
+    original_requirement: str = ""  # Original user requirement
+    validation_mode: ValidationMode = ValidationMode.EXACT  # Explicit validation mode
+    relaxed_mode: bool = False  # Flag for relaxed validation
+
+    def __post_init__(self):
+        """Validate and normalize the context after initialization"""
+        if not self.original_requirement:
+            raise ValueError("Original requirement must be provided")
+        
+        # Set validation mode based on relaxed_mode flag
+        if self.relaxed_mode:
+            self.validation_mode = ValidationMode.RELAXED
 
 class AssertionModule:
     def __init__(self):
@@ -144,11 +157,13 @@ class AssertionModule:
             # 2. Determine verification type
             assertion_type = self._determine_assertion_type(context.verification_step)
             
-            # 3. Log verification attempt
+            # 3. Log verification attempt with original requirement
             logger.info(f"🔍 Verifying {assertion_type.value} at step {context.step_number}")
+            logger.info(f"Original requirement: {context.original_requirement}")
             logger.debug(f"Action: {context.action_type}")
             logger.debug(f"Expected: '{context.expected_value}'")
             logger.debug(f"Actual: '{context.actual_value}'")
+            logger.debug(f"Validation mode: {context.validation_mode}")
             
             # 4. Get the appropriate handler
             handler = self.verification_handlers.get(assertion_type)
@@ -158,16 +173,19 @@ class AssertionModule:
             # 5. Perform verification
             result = await handler(context)
             
-            # 6. Log result
+            # 6. Log result with original requirement
             if result:
                 logger.info(f"✅ {assertion_type.value} verification passed at step {context.step_number}")
+                logger.info(f"Original requirement satisfied: {context.original_requirement}")
             else:
                 logger.error(f"❌ {assertion_type.value} verification failed at step {context.step_number}")
+                logger.error(f"Failed requirement: {context.original_requirement}")
             
             return result
 
         except Exception as e:
             logger.error(f"❌ Verification error at step {context.step_number}: {str(e)}")
+            logger.error(f"Failed requirement: {context.original_requirement}")
             raise
 
     def _validate_context(self, context: VerificationContext):

@@ -41,9 +41,9 @@ async def main():
         task="""
                @agent=keep this in mind that you are testing a website so, follow the instructions carefully do not go beyond the instructions
                 step 1. Navigate to http://uitestingplayground.com/home
-                step 2. check the 'Wait for animation to stop before clicking a button' is a text on the page
-                step 3. assert the link 'Shadow DOM' with href 'http://uitestingplayground.com/shadowdom' is present in the page
-                
+                step 2. assert that the text 'Different automation pitfalls appearing in modern web applications are described and emulated below.' is displayed on the page.
+                step 3. assert that the text 'Accept alerts, confirmations and prompts' is displaying on the page.
+                step 4. click on 'Dynamic ID' link.
                 """,
         llm=llm,
         controller=controller,
