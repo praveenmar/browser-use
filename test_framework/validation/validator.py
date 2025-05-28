@@ -68,8 +68,26 @@ class TestValidator:
         mode: ValidationMode = ValidationMode.EXACT,
         original_requirement: Optional[str] = None
     ) -> ValidationResult:
-        """Validate text content"""
-        logger.debug(f"Validating text: expected='{expected}', actual='{actual}', mode={mode}")
+        """Validate text content with strict matching rules.
+        
+        Args:
+            expected: The expected text to match against
+            actual: The actual text to validate
+            mode: The validation mode (EXACT, CONTAINS, RELAXED)
+            original_requirement: The original requirement string
+            
+        Returns:
+            ValidationResult with validation outcome
+        """
+        # Log the text comparison details
+        logger.info("=" * 80)
+        logger.info("Text Validation Details:")
+        logger.info("-" * 40)
+        logger.info(f"Mode: {mode.value}")
+        logger.info(f"Expected text: '{expected}'")
+        logger.info(f"Actual text:   '{actual}'")
+        logger.info(f"Length - Expected: {len(expected)}, Actual: {len(actual)}")
+        logger.info("-" * 40)
         
         if not actual:
             logger.error("Actual text is empty")
@@ -86,7 +104,7 @@ class TestValidator:
         if mode == ValidationMode.EXACT:
             logger.debug("Using exact matching")
             if expected == actual:
-                logger.info("Exact match found")
+                logger.info("✅ Exact match found")
                 return ValidationResult(
                     success=True,
                     expected=expected,
@@ -95,7 +113,16 @@ class TestValidator:
                     original_requirement=original_requirement or ""
                 )
             else:
-                logger.error(f"Exact match failed: expected='{expected}', actual='{actual}'")
+                # Log character-by-character comparison for debugging
+                logger.error("❌ Exact match failed")
+                logger.error("Character comparison:")
+                min_len = min(len(expected), len(actual))
+                for i in range(min_len):
+                    if expected[i] != actual[i]:
+                        logger.error(f"Position {i}: Expected '{expected[i]}' ({ord(expected[i])}), Got '{actual[i]}' ({ord(actual[i])})")
+                if len(expected) != len(actual):
+                    logger.error(f"Length mismatch: Expected {len(expected)}, Got {len(actual)}")
+                
                 return ValidationResult(
                     success=False,
                     expected=expected,
@@ -109,7 +136,10 @@ class TestValidator:
         elif mode == ValidationMode.CONTAINS:
             logger.debug("Using contains matching")
             if expected in actual:
-                logger.info("Contains match found")
+                logger.info("✅ Contains match found")
+                # Log where the match was found
+                start_idx = actual.find(expected)
+                logger.info(f"Match found at position {start_idx}")
                 return ValidationResult(
                     success=True,
                     expected=expected,
@@ -118,7 +148,8 @@ class TestValidator:
                     original_requirement=original_requirement or ""
                 )
             else:
-                logger.error(f"Contains match failed: expected='{expected}', actual='{actual}'")
+                logger.error("❌ Contains match failed")
+                logger.error(f"Could not find '{expected}' in the text")
                 return ValidationResult(
                     success=False,
                     expected=expected,
@@ -131,12 +162,16 @@ class TestValidator:
                 
         elif mode == ValidationMode.RELAXED:
             logger.debug("Using relaxed matching")
-            # Convert to lowercase and remove extra whitespace
-            expected_clean = ' '.join(expected.lower().split())
-            actual_clean = ' '.join(actual.lower().split())
+            # Only normalize whitespace, preserve case and special characters
+            expected_clean = ' '.join(expected.split())
+            actual_clean = ' '.join(actual.split())
+            
+            logger.info("Whitespace normalized comparison:")
+            logger.info(f"Expected (normalized): '{expected_clean}'")
+            logger.info(f"Actual (normalized):   '{actual_clean}'")
             
             if expected_clean == actual_clean:
-                logger.info("Relaxed match found")
+                logger.info("✅ Relaxed match found")
                 return ValidationResult(
                     success=True,
                     expected=expected,
@@ -145,7 +180,7 @@ class TestValidator:
                     original_requirement=original_requirement or ""
                 )
             else:
-                logger.error(f"Relaxed match failed: expected='{expected_clean}', actual='{actual_clean}'")
+                logger.error("❌ Relaxed match failed")
                 return ValidationResult(
                     success=False,
                     expected=expected,

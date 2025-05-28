@@ -7,7 +7,12 @@ from browser_use.controller.service import Controller
 from browser_use.browser.browser import Browser
 from browser_use.browser.context import BrowserContext
 from test_framework.llm.llm_client import LLMClient
-from test_framework.validation.assertions import TestAssertions, AssertionResult
+from test_framework.validation.assertions import (
+    VerificationAssertions,
+    ExtractionAssertions,
+    MatchingAssertions,
+    AssertionResult
+)
 from test_framework.validation.validator import TestValidator, ValidationMode
 from playwright.async_api import Page
 import re
@@ -23,13 +28,27 @@ class TestAgent:
         controller: Optional[Controller] = None,
         browser: Optional[Browser] = None,
         browser_context: Optional[BrowserContext] = None,
+        assertion_mode: str = "hard"  # Default to hard assertions
     ):
+        """Initialize test agent.
+        
+        Args:
+            task: The task description
+            llm: Language model for agent
+            controller: Controller for actions
+            browser: Browser instance
+            browser_context: Browser context
+            assertion_mode: Mode of assertions - "hard" or "soft"
+        """
         logger.debug(f"Initializing TestAgent with task: {task}")
         self.task = task
         self.llm = llm or LLMClient("gemini-2.0-flash-exp")
         self.controller = controller or Controller()
         self.browser = browser or Browser()
         self.browser_context = browser_context or BrowserContext()
+        self.assertion_mode = assertion_mode.lower()
+        if self.assertion_mode not in ["hard", "soft"]:
+            raise ValueError("assertion_mode must be either 'hard' or 'soft'")
         
         # Store original requirements
         self.original_requirements = self._extract_requirements(task)
@@ -37,6 +56,18 @@ class TestAgent:
         
         # Configure logging
         logging.basicConfig(level=logging.INFO)
+        
+        # Initialize agent
+        self.agent = Agent(
+            task=task,
+            llm=self.llm,
+            controller=self.controller,
+            browser=self.browser,
+            browser_context=self.browser_context
+        )
+        
+        # Initialize assertions using VerificationAssertions directly
+        self.assertions = VerificationAssertions(self.agent, self.agent.state.history)
         
     def _extract_requirements(self, task: str) -> List[str]:
         """Extract original requirements from task description"""
@@ -63,86 +94,88 @@ class TestAgent:
         try:
             logger.info("Starting test execution...")
             logger.info(f"Task:\n{self.task}")
-
-            # Initialize agent for navigation
-            logger.debug("Initializing agent for navigation")
-            self.agent = Agent(
-                task=self.task,
-                llm=self.llm,
-                controller=self.controller,
-                browser=self.browser,
-                browser_context=self.browser_context,
-            )
-
-            # Run navigation steps
-            logger.debug("Running navigation steps")
-            result: AgentHistoryList = await self.agent.run()
-            logger.debug(f"Navigation result: {result}")
             
-            # Get the current page and ensure it's a valid Page instance
-            logger.debug("Getting current page")
-            page = await self.browser_context.get_current_page()
-            if not isinstance(page, Page):
-                raise ValueError(f"Expected Playwright Page object, got {type(page)}")
+            # Run the agent
+            result = await self.agent.run()
             
-            # Create assertions instance for verification
-            logger.debug("Creating assertions instance")
-            assertions = TestAssertions(self.agent, result)
-            assertions.page = page
+            # Extract requirements from task
+            requirements = self._extract_requirements(self.task)
             
-            # Verify all requirements
-            logger.debug("Starting requirement verification")
+            # Verify each requirement
             verification_results = []
-            for requirement in self.original_requirements:
-                logger.debug(f"Verifying requirement: {requirement}")
-                result = await assertions._verify_condition(requirement)
-                logger.debug(f"Verification result: {result}")
-                verification_results.append(result)
-                
-                # Log verification result
-                if result.success:
-                    logger.info(f"✅ Verification passed: {requirement}")
-                    logger.debug(f"Verification details: {result.metadata}")
-                else:
-                    logger.error(f"❌ Verification failed: {requirement}")
-                    logger.error(f"Error: {result.message}")
-                    logger.debug(f"Verification details: {result.metadata}")
-                    return ActionResult(
-                        success=False,
-                        message=f"Verification failed: {result.message}",
-                        data={
-                            "requirement": requirement,
-                            "result": {
-                                "success": result.success,
-                                "error_code": result.error_code,
-                                "message": result.message,
-                                "metadata": result.metadata
-                            }
-                        }
-                    )
-            
-            # Return success if all verifications passed
-            logger.info("All verifications passed successfully")
-            return ActionResult(
-                success=True,
-                message="All requirements verified successfully",
-                data={
-                    "verification_results": [
-                        {
-                            "success": r.success,
-                            "error_code": r.error_code,
-                            "message": r.message,
-                            "metadata": r.metadata
-                        } for r in verification_results
-                    ]
-                }
-            )
+            for i, requirement in enumerate(requirements):
+                try:
+                    verification_result = await self.assertions.verify_requirement(requirement, i)
+                    verification_results.append(verification_result)
+                    
+                    # Log verification result
+                    if verification_result.success:
+                        logger.info(f"✅ Verification passed: {requirement}")
+                    else:
+                        logger.error(f"❌ Verification failed: {requirement}")
+                        logger.error(f"Error: {verification_result.message}")
+                        
+                        # If hard assertions, stop on first failure
+                        if self.assertion_mode == "hard":
+                            return ActionResult(
+                                success=False,
+                                error=f"Failed to verify requirement: {requirement}",
+                                data={
+                                    "verification_results": [
+                                        {
+                                            "success": r.success,
+                                            "error_code": r.error_code,
+                                            "message": r.message,
+                                            "metadata": r.metadata
+                                        } for r in verification_results
+                                    ]
+                                }
+                            )
+                except Exception as e:
+                    logger.error(f"Error verifying requirement {requirement}: {str(e)}")
+                    if self.assertion_mode == "hard":
+                        raise
+                    
+            # Check if all verifications passed
+            all_passed = all(r.success for r in verification_results)
+            if all_passed:
+                logger.info("All verifications passed successfully")
+                return ActionResult(
+                    success=True,
+                    message="All requirements verified successfully",
+                    data={
+                        "verification_results": [
+                            {
+                                "success": r.success,
+                                "error_code": r.error_code,
+                                "message": r.message,
+                                "metadata": r.metadata
+                            } for r in verification_results
+                        ]
+                    }
+                )
+            else:
+                failed_requirements = [r for r in verification_results if not r.success]
+                return ActionResult(
+                    success=False,
+                    error=f"Some requirements failed verification: {[r.message for r in failed_requirements]}",
+                    data={
+                        "verification_results": [
+                            {
+                                "success": r.success,
+                                "error_code": r.error_code,
+                                "message": r.message,
+                                "metadata": r.metadata
+                            } for r in verification_results
+                        ]
+                    }
+                )
 
         except Exception as e:
             logger.error(f"Test execution failed: {str(e)}", exc_info=True)
             return ActionResult(
                 success=False,
-                message=f"Test execution failed: {str(e)}",
+                error=f"Test execution failed: {str(e)}",
                 data={}
             )
         finally:

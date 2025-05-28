@@ -2,7 +2,12 @@ import pytest
 import pytest_asyncio
 from unittest.mock import Mock, AsyncMock
 from patchright.async_api import Page, Locator, TimeoutError as PlaywrightTimeoutError
-from test_framework.validation.assertions import TestAssertions, VerifyTextAction, VerifyLinkAction
+from test_framework.validation.assertions import (
+    VerificationAssertions,
+    ExtractionAssertions,
+    MatchingAssertions,
+    AssertionResult
+)
 from browser_use.agent.views import ActionResult
 from browser_use.browser.context import BrowserContext
 
@@ -28,167 +33,122 @@ async def mock_agent(mock_browser_context):
     return agent
 
 @pytest_asyncio.fixture
-async def test_assertions(mock_agent):
-    return TestAssertions(mock_agent, Mock())
+async def verification_assertions(mock_agent):
+    return VerificationAssertions(mock_agent, Mock())
 
 class TestTextVerification:
     @pytest.mark.asyncio
-    async def test_verify_text_success(self, mock_page, mock_browser_context):
+    async def test_verify_text_success(self, mock_page, mock_browser_context, verification_assertions):
         # Setup
         text_locator = mock_page.get_by_text.return_value
         text_locator.to_be_visible = AsyncMock()
         
-        # Create action
-        action = VerifyTextAction(text="Test Text", exact=False)
-        
-        # Create a mock controller with the verify_text action
-        controller = Mock()
-        async def verify_text(params, browser):
-            if params.text == "Test Text":
-                return ActionResult(extracted_content="Verified text 'Test Text' is present on the page")
-            return ActionResult(error="Text not found")
-        controller.act = AsyncMock(side_effect=verify_text)
-        
-        # Execute
-        result = await controller.act(action, mock_browser_context)
+        # Create verification
+        result = await verification_assertions._verify_condition("verify the text 'Test Text' is present", 0)
         
         # Assert
-        assert isinstance(result, ActionResult)
-        assert result.error is None
-        assert "Verified text" in result.extracted_content
+        assert isinstance(result, AssertionResult)
+        assert result.success is True
+        assert result.error_code is None
+        assert "Test Text" in result.message
 
     @pytest.mark.asyncio
-    async def test_verify_text_not_found(self, mock_page, mock_browser_context):
+    async def test_verify_text_not_found(self, mock_page, mock_browser_context, verification_assertions):
         # Setup
         text_locator = mock_page.get_by_text.return_value
         text_locator.to_be_visible = AsyncMock(side_effect=PlaywrightTimeoutError("Text not found"))
         
-        # Create action
-        action = VerifyTextAction(text="Non-existent Text")
-        
-        # Create a mock controller with the verify_text action
-        controller = Mock()
-        async def verify_text(params, browser):
-            return ActionResult(error="Text 'Non-existent Text' not found on the page")
-        controller.act = AsyncMock(side_effect=verify_text)
-        
-        # Execute
-        result = await controller.act(action, mock_browser_context)
+        # Create verification
+        result = await verification_assertions._verify_condition("verify the text 'Non-existent Text' is present", 0)
         
         # Assert
-        assert isinstance(result, ActionResult)
-        assert result.error is not None
-        assert "not found" in result.error
+        assert isinstance(result, AssertionResult)
+        assert result.success is False
+        assert result.error_code == "TEXT_MISMATCH"
+        assert "not found" in result.message
 
 class TestLinkVerification:
     @pytest.mark.asyncio
-    async def test_verify_link_success(self, mock_page, mock_browser_context):
+    async def test_verify_link_success(self, mock_page, mock_browser_context, verification_assertions):
         # Setup
         link_locator = mock_page.get_by_role.return_value
         link_locator.to_be_visible = AsyncMock()
         link_locator.get_attribute = AsyncMock(return_value="https://example.com")
         
-        # Create action
-        action = VerifyLinkAction(
-            text="Test Link",
-            href="https://example.com",
-            exact=False
+        # Create verification
+        result = await verification_assertions._verify_condition(
+            "verify the link 'Test Link' with href 'https://example.com' is present",
+            0
         )
         
-        # Create a mock controller with the verify_link action
-        controller = Mock()
-        async def verify_link(params, browser):
-            if params.text == "Test Link" and params.href == "https://example.com":
-                return ActionResult(extracted_content="Verified link 'Test Link' with href 'https://example.com' is present")
-            return ActionResult(error="Link not found")
-        controller.act = AsyncMock(side_effect=verify_link)
-        
-        # Execute
-        result = await controller.act(action, mock_browser_context)
-        
         # Assert
-        assert isinstance(result, ActionResult)
-        assert result.error is None
-        assert "Verified link" in result.extracted_content
+        assert isinstance(result, AssertionResult)
+        assert result.success is True
+        assert result.error_code is None
+        assert "Test Link" in result.message
 
     @pytest.mark.asyncio
-    async def test_verify_link_not_found(self, mock_page, mock_browser_context):
+    async def test_verify_link_not_found(self, mock_page, mock_browser_context, verification_assertions):
         # Setup
         link_locator = mock_page.get_by_role.return_value
         link_locator.to_be_visible = AsyncMock(side_effect=PlaywrightTimeoutError("Link not found"))
         
-        # Create action
-        action = VerifyLinkAction(
-            text="Non-existent Link",
-            href="https://example.com"
+        # Create verification
+        result = await verification_assertions._verify_condition(
+            "verify the link 'Non-existent Link' with href 'https://example.com' is present",
+            0
         )
         
-        # Create a mock controller with the verify_link action
-        controller = Mock()
-        async def verify_link(params, browser):
-            return ActionResult(error="Link 'Non-existent Link' not found on the page")
-        controller.act = AsyncMock(side_effect=verify_link)
-        
-        # Execute
-        result = await controller.act(action, mock_browser_context)
-        
         # Assert
-        assert isinstance(result, ActionResult)
-        assert result.error is not None
-        assert "not found" in result.error
+        assert isinstance(result, AssertionResult)
+        assert result.success is False
+        assert result.error_code == "LINK_NOT_FOUND"
+        assert "not found" in result.message
 
     @pytest.mark.asyncio
-    async def test_verify_link_href_mismatch(self, mock_page, mock_browser_context):
+    async def test_verify_link_href_mismatch(self, mock_page, mock_browser_context, verification_assertions):
         # Setup
         link_locator = mock_page.get_by_role.return_value
         link_locator.to_be_visible = AsyncMock()
         link_locator.get_attribute = AsyncMock(return_value="https://wrong-url.com")
         
-        # Create action
-        action = VerifyLinkAction(
-            text="Test Link",
-            href="https://example.com"
+        # Create verification
+        result = await verification_assertions._verify_condition(
+            "verify the link 'Test Link' with href 'https://example.com' is present",
+            0
         )
         
-        # Create a mock controller with the verify_link action
-        controller = Mock()
-        async def verify_link(params, browser):
-            return ActionResult(error="Link href mismatch. Expected: https://example.com, Got: https://wrong-url.com")
-        controller.act = AsyncMock(side_effect=verify_link)
-        
-        # Execute
-        result = await controller.act(action, mock_browser_context)
-        
         # Assert
-        assert isinstance(result, ActionResult)
-        assert result.error is not None
-        assert "href mismatch" in result.error
+        assert isinstance(result, AssertionResult)
+        assert result.success is False
+        assert result.error_code == "LINK_HREF_MISMATCH"
+        assert "href mismatch" in result.message
 
-class TestStepHooks:
+class TestStepVerification:
     @pytest.mark.asyncio
-    async def test_extract_verification_steps(self, test_assertions):
+    async def test_extract_verification_steps(self, verification_assertions):
         # Test text verification step
         text_step = "assert the text 'Hello World' is present in the page"
-        steps = test_assertions._extract_verification_steps(text_step)
+        steps = verification_assertions._extract_verification_steps(text_step)
         assert len(steps) == 1
         assert "assert the text" in steps[0].lower()
 
         # Test link verification step
         link_step = "verify the link 'Click here' with href 'https://example.com' is present"
-        steps = test_assertions._extract_verification_steps(link_step)
+        steps = verification_assertions._extract_verification_steps(link_step)
         assert len(steps) == 1
         assert "verify the link" in steps[0].lower()
 
     @pytest.mark.asyncio
-    async def test_should_verify_now(self, test_assertions):
+    async def test_should_verify_now(self, verification_assertions):
         # Test text verification
         text_step = "verify the text 'Hello World' is present"
-        assert test_assertions._should_verify_now({"go_to_url": {}}, text_step) is True
+        assert verification_assertions._should_verify_now({"go_to_url": {}}, text_step) is True
 
         # Test link verification
         link_step = "verify the link 'Click here' with href 'https://example.com'"
-        assert test_assertions._should_verify_now({"go_to_url": {}}, link_step) is True
+        assert verification_assertions._should_verify_now({"go_to_url": {}}, link_step) is True
 
         # Test non-verification step
         non_verify_step = "click the button"
-        assert test_assertions._should_verify_now({"go_to_url": {}}, non_verify_step) is False
+        assert verification_assertions._should_verify_now({"go_to_url": {}}, non_verify_step) is False

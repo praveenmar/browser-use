@@ -9,6 +9,8 @@ from browser_use.browser.browser import Browser, BrowserConfig
 from browser_use.browser.context import BrowserContext
 from langchain_google_genai import ChatGoogleGenerativeAI
 from dotenv import load_dotenv
+import json
+import sys
 
 # Configure logging
 logging.basicConfig(
@@ -39,25 +41,45 @@ async def main():
     # Create test agent with the task description
     agent = TestAgent(
         task="""
-               @agent=keep this in mind that you are testing a website so, follow the instructions carefully do not go beyond the instructions
+                @agent:
+                    You are performing automated testing on a website. Your task is to strictly follow the provided instructions step by step. Do not take any actions beyond what is explicitly specified. Your goal is to validate that the website behaves as expected based on the instructions.
                 step 1. Navigate to http://uitestingplayground.com/home
-                step 2. assert that the text 'Different automation pitfalls appearing in modern web applications are described and emulated below.' is displayed on the page.
-                step 3. assert that the text 'Accept alerts, confirmations and prompts' is displaying on the page.
-                step 4. click on 'Dynamic ID' link.
-                """,
+                step 2. Assert that the text 'Wait foredit field to become enabled' is displayed on the page.
+                step 3. and Assert that the 'Entering text into an edit field may not have' is displayed on the page.
+                step 4. Assert that the text 'Check that class attribute based XPath is well formed' is displayed on the page.
+        """,
         llm=llm,
         controller=controller,
-        browser=browser,
-        browser_context=browser_context
+        browser=browser,    
+        browser_context=browser_context,
+        assertion_mode="soft"  # Use soft assertions to continue even if some verifications fail
     )
     
     try:
         logger.info("Starting test execution...")
         result = await agent.run()
-        logger.info("Test completed successfully!")
+        
+        # Check if the test was successful
+        if result.success:
+            logger.info("✅ Test completed successfully!")
+        else:
+            # Extract error message from the result
+            error_msg = None
+            if hasattr(result, 'error') and result.error:
+                error_msg = result.error
+            elif hasattr(result, 'extracted_content') and result.extracted_content:
+                error_msg = result.extracted_content
+            else:
+                error_msg = "Test failed without specific error message"
+                
+            logger.error(f"❌ Test failed: {error_msg}")
+            if hasattr(result, 'metadata') and result.metadata:
+                logger.error(f"Failure details: {json.dumps(result.metadata, indent=2)}")
+            sys.exit(1)  # Exit with error code
+            
         return result
     except Exception as e:
-        logger.error(f"Test failed: {str(e)}")
+        logger.error(f"❌ Test failed with exception: {str(e)}")
         raise
 
 if __name__ == "__main__":
