@@ -9,7 +9,7 @@ from test_framework.validation.assertions import (
     AssertionResult
 )
 from browser_use.agent.views import ActionResult
-from browser_use.browser.context import BrowserContext
+from browser_use.browser.session import BrowserSession
 
 @pytest_asyncio.fixture
 async def mock_page():
@@ -19,110 +19,103 @@ async def mock_page():
     return page
 
 @pytest_asyncio.fixture
-async def mock_browser_context(mock_page):
-    context = Mock(spec=BrowserContext)
-    context.get_current_page = AsyncMock(return_value=mock_page)
-    return context
+async def mock_browser_session(mock_page):
+    session = Mock(spec=BrowserSession)
+    session.get_current_page = AsyncMock(return_value=mock_page)
+    return session
 
 @pytest_asyncio.fixture
-async def mock_agent(mock_browser_context):
+async def mock_agent(mock_browser_session):
     agent = Mock()
-    agent.browser_context = mock_browser_context
+    agent.browser_session = mock_browser_session
     agent.state = Mock()
     agent.state.n_steps = 1
     return agent
 
 @pytest_asyncio.fixture
 async def verification_assertions(mock_agent):
-    return VerificationAssertions(mock_agent, Mock())
+    return VerificationAssertions(mock_agent, [])
 
-class TestTextVerification:
-    @pytest.mark.asyncio
-    async def test_verify_text_success(self, mock_page, mock_browser_context, verification_assertions):
-        # Setup
-        text_locator = mock_page.get_by_text.return_value
-        text_locator.to_be_visible = AsyncMock()
-        
-        # Create verification
-        result = await verification_assertions._verify_condition("verify the text 'Test Text' is present", 0)
-        
-        # Assert
-        assert isinstance(result, AssertionResult)
-        assert result.success is True
-        assert result.error_code is None
-        assert "Test Text" in result.message
+@pytest_asyncio.fixture
+async def extraction_assertions(mock_agent):
+    return ExtractionAssertions(mock_agent, [])
 
-    @pytest.mark.asyncio
-    async def test_verify_text_not_found(self, mock_page, mock_browser_context, verification_assertions):
-        # Setup
-        text_locator = mock_page.get_by_text.return_value
-        text_locator.to_be_visible = AsyncMock(side_effect=PlaywrightTimeoutError("Text not found"))
-        
-        # Create verification
-        result = await verification_assertions._verify_condition("verify the text 'Non-existent Text' is present", 0)
-        
-        # Assert
-        assert isinstance(result, AssertionResult)
-        assert result.success is False
-        assert result.error_code == "TEXT_MISMATCH"
-        assert "not found" in result.message
+@pytest_asyncio.fixture
+async def matching_assertions(mock_agent):
+    return MatchingAssertions(mock_agent, [])
 
-class TestLinkVerification:
+class TestVerificationAssertions:
+    """Test verification assertions"""
+    
     @pytest.mark.asyncio
-    async def test_verify_link_success(self, mock_page, mock_browser_context, verification_assertions):
+    async def test_verify_text_success(self, mock_page, mock_browser_session, verification_assertions):
+        """Test successful text verification"""
         # Setup
-        link_locator = mock_page.get_by_role.return_value
-        link_locator.to_be_visible = AsyncMock()
-        link_locator.get_attribute = AsyncMock(return_value="https://example.com")
+        mock_page.get_by_text.return_value.is_visible.return_value = True
+        mock_page.get_by_text.return_value.text_content.return_value = "Test Text"
         
-        # Create verification
-        result = await verification_assertions._verify_condition(
-            "verify the link 'Test Link' with href 'https://example.com' is present",
-            0
-        )
+        # Execute
+        result = await verification_assertions.verify_text("Test Text")
         
-        # Assert
-        assert isinstance(result, AssertionResult)
-        assert result.success is True
-        assert result.error_code is None
-        assert "Test Link" in result.message
-
+        # Verify
+        assert result.success
+        assert result.message == "Text 'Test Text' found and visible"
+        
     @pytest.mark.asyncio
-    async def test_verify_link_not_found(self, mock_page, mock_browser_context, verification_assertions):
+    async def test_verify_text_not_found(self, mock_page, mock_browser_session, verification_assertions):
+        """Test text verification when text is not found"""
         # Setup
-        link_locator = mock_page.get_by_role.return_value
-        link_locator.to_be_visible = AsyncMock(side_effect=PlaywrightTimeoutError("Link not found"))
+        mock_page.get_by_text.return_value.is_visible.return_value = False
         
-        # Create verification
-        result = await verification_assertions._verify_condition(
-            "verify the link 'Non-existent Link' with href 'https://example.com' is present",
-            0
-        )
+        # Execute
+        result = await verification_assertions.verify_text("Nonexistent Text")
         
-        # Assert
-        assert isinstance(result, AssertionResult)
-        assert result.success is False
-        assert result.error_code == "LINK_NOT_FOUND"
-        assert "not found" in result.message
-
+        # Verify
+        assert not result.success
+        assert "Text 'Nonexistent Text' not found or not visible" in result.message
+        
     @pytest.mark.asyncio
-    async def test_verify_link_href_mismatch(self, mock_page, mock_browser_context, verification_assertions):
+    async def test_verify_link_success(self, mock_page, mock_browser_session, verification_assertions):
+        """Test successful link verification"""
         # Setup
-        link_locator = mock_page.get_by_role.return_value
-        link_locator.to_be_visible = AsyncMock()
-        link_locator.get_attribute = AsyncMock(return_value="https://wrong-url.com")
+        mock_page.get_by_role.return_value.is_visible.return_value = True
+        mock_page.get_by_role.return_value.get_attribute.return_value = "https://example.com"
+        mock_page.get_by_role.return_value.text_content.return_value = "Example Link"
         
-        # Create verification
-        result = await verification_assertions._verify_condition(
-            "verify the link 'Test Link' with href 'https://example.com' is present",
-            0
-        )
+        # Execute
+        result = await verification_assertions.verify_link("Example Link", "https://example.com")
         
-        # Assert
-        assert isinstance(result, AssertionResult)
-        assert result.success is False
-        assert result.error_code == "LINK_HREF_MISMATCH"
-        assert "href mismatch" in result.message
+        # Verify
+        assert result.success
+        assert result.message == "Link 'Example Link' found with matching href"
+        
+    @pytest.mark.asyncio
+    async def test_verify_link_not_found(self, mock_page, mock_browser_session, verification_assertions):
+        """Test link verification when link is not found"""
+        # Setup
+        mock_page.get_by_role.return_value.is_visible.return_value = False
+        
+        # Execute
+        result = await verification_assertions.verify_link("Nonexistent Link", "https://example.com")
+        
+        # Verify
+        assert not result.success
+        assert "Link 'Nonexistent Link' not found or not visible" in result.message
+        
+    @pytest.mark.asyncio
+    async def test_verify_link_href_mismatch(self, mock_page, mock_browser_session, verification_assertions):
+        """Test link verification when href doesn't match"""
+        # Setup
+        mock_page.get_by_role.return_value.is_visible.return_value = True
+        mock_page.get_by_role.return_value.get_attribute.return_value = "https://wrong.com"
+        mock_page.get_by_role.return_value.text_content.return_value = "Example Link"
+        
+        # Execute
+        result = await verification_assertions.verify_link("Example Link", "https://example.com")
+        
+        # Verify
+        assert not result.success
+        assert "Link href mismatch" in result.message
 
 class TestStepVerification:
     @pytest.mark.asyncio

@@ -10,6 +10,7 @@ import re
 
 from browser_use.agent.views import ActionResult, AgentHistoryList
 from browser_use.agent.service import Agent
+from browser_use.browser.session import BrowserSession
 
 from .base import BaseAssertions, AssertionResult
 from .matching import MatchingAssertions
@@ -30,6 +31,7 @@ class ExtractionAssertions(BaseAssertions):
         self._matching = MatchingAssertions(agent, result)
         self._extraction_cache = {}
         self._processed_extractions = set()
+        self.browser_session = None
         logger.debug(f"Initialized ExtractionAssertions with agent type: {type(agent)}")
         
     def _process_pending_extractions(self, current_step: int, lookahead_window: int = 2) -> None:
@@ -87,14 +89,6 @@ class ExtractionAssertions(BaseAssertions):
         """
         logger.debug(f"Getting extraction result for requirement: {requirement}")
         
-        # Extract the expected text from the requirement
-        match = re.search(r'["\'](.*?)["\']', requirement)
-        if not match:
-            logger.error(f"Could not extract text from requirement: {requirement}")
-            return None
-        expected_text = match.group(1)
-        logger.debug(f"Looking for text: {expected_text}")
-        
         # Process pending extractions first
         self._process_pending_extractions(current_step)
         
@@ -119,12 +113,12 @@ class ExtractionAssertions(BaseAssertions):
             extracted_text = self._extract_text_from_content(content)
             
             # Check for exact match
-            if expected_text == extracted_text:
+            if requirement == extracted_text:
                 logger.info(f"Found exact match in extraction: {extracted_text}")
                 return self._process_extraction_result(content)
             
             # Calculate similarity between expected text and extracted text
-            score = self._calculate_text_similarity(expected_text, extracted_text)
+            score = self._calculate_text_similarity(requirement, extracted_text)
             if score > best_score:
                 best_score = score
                 best_match = action
@@ -153,7 +147,7 @@ class ExtractionAssertions(BaseAssertions):
             # Create extraction action
             action_data = {
                 "extract_content": {
-                    "goal": f"Find the text: {expected_text}",
+                    "goal": f"Find the text: {requirement}",
                     "should_strip_link_urls": True
                 }
             }
@@ -165,15 +159,15 @@ class ExtractionAssertions(BaseAssertions):
                 
             action = ExtractContentActionModel(**action_data)
             
-            # Get browser context from agent
-            if not hasattr(self.agent, 'browser_context'):
-                logger.error("Agent does not have browser_context attribute")
+            # Get browser session from agent
+            if not hasattr(self.agent, 'browser_session'):
+                logger.error("Agent does not have browser_session attribute")
                 return None
                 
-            # Use controller to act on the action with browser context and page_extraction_llm
+            # Use controller to act on the action with browser session and page_extraction_llm
             result = await self.agent.controller.act(
                 action, 
-                self.agent.browser_context,
+                self.agent.browser_session,
                 page_extraction_llm=self.agent.settings.page_extraction_llm
             )
             

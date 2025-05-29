@@ -142,7 +142,7 @@ class VerificationAssertions(ExtractionAssertions, MatchingAssertions):
                     "mode": "fuzzy"
                 }
             )
-            
+        
         # If all verification attempts fail
         logger.warning(f"All verification attempts failed for requirement: {requirement}")
         return AssertionResult(

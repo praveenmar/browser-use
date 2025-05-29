@@ -1,137 +1,55 @@
+"""
+Step hooks for the test framework.
+"""
+
 import logging
-from patchright.async_api import expect
-from test_framework.validation.assertions import TestAssertions
-from browser_use.agent.views import ActionModel
+from typing import Optional, Dict, Any
+from browser_use.agent.views import ActionResult, ActionModel
+from browser_use.browser.session import BrowserSession
 
 logger = logging.getLogger("test_framework.agent.step_hooks")
 
-async def step_end_hook(agent):
-    """
-    Hook to be called after each agent step.
-    Receives the agent instance, can access state, last action/result, etc.
-    """
-    try:
-        # Get the task description
-        task_description = agent.task
-        if not task_description:
-            return
-
-        # Extract verification steps
-        verification_steps = extract_verification_steps(task_description)
-        if not verification_steps:
-            return
-
-        # Get the last action
-        last_action = agent.state.last_action
-        if not last_action:
-            return
-
-        # For each verification step, check if we should verify now
-        for step in verification_steps:
-            if _should_verify_now(last_action, step):
-                logger.info(f"[Step Hook] 🔍 Verifying at step {agent.state.n_steps}: {step}")
-                
-                # Extract text to verify
-                text_to_verify = None
-                if "'" in step:
-                    parts = step.split("'")
-                    if len(parts) >= 2:
-                        text_to_verify = parts[1]
-                elif '"' in step:
-                    parts = step.split('"')
-                    if len(parts) >= 2:
-                        text_to_verify = parts[1]
-                
-                if not text_to_verify:
-                    logger.error(f"[Step Hook] ❌ Could not extract text to verify from step: {step}")
-                    continue
-
-                # Create verify text action
-                verify_action = ActionModel(**{
-                    "verify_text": {
-                        "text": text_to_verify,
-                        "exact": True,  # Use exact match for verification steps
-                        "timeout": 5000  # 5 second timeout
+class StepHooks:
+    """Hooks for test steps"""
+    
+    def __init__(self, agent):
+        """Initialize step hooks"""
+        self.agent = agent
+        
+    async def before_step(self, step_number: int, action: ActionModel) -> None:
+        """Hook called before each step"""
+        logger.debug(f"Before step {step_number}")
+        
+    async def after_step(self, step_number: int, action: ActionModel, result: ActionResult) -> None:
+        """Hook called after each step"""
+        logger.debug(f"After step {step_number}")
+        
+        # If step failed, try to verify the failure
+        if not result.success and hasattr(self.agent, 'browser_session'):
+            try:
+                # Create verification action
+                verify_action = ActionModel(
+                    verify={
+                        "goal": f"Verify failure of step {step_number}",
+                        "should_strip_link_urls": True
                     }
-                })
-
-                # Execute the verification
-                try:
-                    result = await agent.controller.act(verify_action, agent.browser_context)
-                    if result.error:
-                        logger.error(f"[Step Hook] ❌ Verification failed at step {agent.state.n_steps}: {step} - {result.error}")
-                        raise AssertionError(f"Verification failed: {result.error}")
-                    logger.info(f"[Step Hook] ✅ Verification passed at step {agent.state.n_steps}: {step}")
-                except Exception as e:
-                    logger.error(f"[Step Hook] ❌ Error in step_end_hook: {str(e)}")
-                    raise
-
-    except Exception as e:
-        logger.error(f"[Step Hook] Error in step_end_hook: {str(e)}")
-        raise
-
-def extract_verification_steps(current_step: str) -> list:
-    """Extract verification steps from the current step text"""
-    verification_steps = []
-    
-    # Split the step into lines
-    lines = current_step.split('\n')
-    
-    for line in lines:
-        line = line.strip()
-        # Look for lines that start with "verify" or contain "verify the text"
-        if line.lower().startswith('verify') or 'verify the text' in line.lower():
-            verification_steps.append(line)
-    
-    return verification_steps
-
-def _should_verify_now(last_action, verification_step: str) -> bool:
-    """Determine if a verification step should be executed now based on the last action"""
-    # Get the action name from the last action
-    action_name = None
-    if isinstance(last_action, dict):
-        action_name = next(iter(last_action.keys()), None)
-    elif hasattr(last_action, '__dict__'):
-        action_name = next(iter(last_action.__dict__.keys()), None)
-    
-    if not action_name:
-        return False
+                )
+                
+                # Use browser session for verification
+                result = await self.agent.controller.act(verify_action, self.agent.browser_session)
+                
+                if result.success:
+                    logger.info(f"Verified failure of step {step_number}")
+                else:
+                    logger.warning(f"Failed to verify step {step_number} failure: {result.error}")
+                    
+            except Exception as e:
+                logger.error(f"Error in after_step hook: {str(e)}")
+                
+    async def on_error(self, step_number: int, action: ActionModel, error: Exception) -> None:
+        """Hook called when a step fails"""
+        logger.error(f"Error in step {step_number}: {str(error)}")
         
-    # List of actions that should trigger immediate verification
-    immediate_verify_actions = [
-        'go_to_url',
-        'click_element',
-        'input_text',
-        'submit_form',
-        'select_option',
-        'check_checkbox',
-        'uncheck_checkbox',
-        'press_key',
-        'hover',
-        'scroll',
-        'wait',
-        'refresh'
-    ]
-    
-    # If the last action is in our immediate verify list, verify now
-    if action_name in immediate_verify_actions:
-        return True
-        
-    # For other actions, check if the verification step matches the action
-    verification_type = verification_step.lower()
-    if 'text' in verification_type or 'content' in verification_type:
-        return True
-    elif 'link' in verification_type or 'href' in verification_type or 'url' in verification_type:
-        return True
-        
-    return False
-
-def _get_action_type(last_action) -> str:
-    """
-    Extract the action type from the last action
-    """
-    if hasattr(last_action, 'action') and last_action.action:
-        first_action = last_action.action[0] if last_action.action else None
-        if first_action:
-            return next(iter(first_action.__dict__.keys()), None)
-    return None
+    async def on_complete(self, success: bool) -> None:
+        """Hook called when all steps are complete"""
+        logger.info(f"Test {'succeeded' if success else 'failed'}")

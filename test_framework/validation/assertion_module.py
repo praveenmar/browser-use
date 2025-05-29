@@ -1,9 +1,15 @@
+"""
+Assertion module for test framework.
+"""
+
 import logging
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List
 from enum import Enum
 from patchright.async_api import expect, Page, Locator, TimeoutError as PlaywrightTimeoutError
-
+from browser_use.browser.session import BrowserSession
+from browser_use.agent.views import ActionResult
+from test_framework.validation.assertions.models import VerificationContext, StepContext
 
 logger = logging.getLogger("test_framework.validation.assertion_module")
 
@@ -88,8 +94,16 @@ class VerificationContext:
             self.validation_mode = ValidationMode.RELAXED
 
 class AssertionModule:
-    def __init__(self):
-        """Initialize the assertion module with all verification handlers"""
+    """Module for handling assertions in the test framework."""
+    
+    def __init__(self, browser_session: Optional[BrowserSession] = None):
+        """Initialize assertion module.
+        
+        Args:
+            browser_session: Optional browser session for page access
+        """
+        self.browser_session = browser_session
+        self.page: Optional[Page] = None
         self.verification_handlers = {
             # Text Content Assertions
             AssertionType.TEXT_VISIBLE: self._verify_text_visible,
@@ -145,6 +159,12 @@ class AssertionModule:
             AssertionType.NOTIFICATION_MESSAGE: self._verify_notification_message,
             AssertionType.VALIDATION_MESSAGE: self._verify_validation_message
         }
+
+    async def ensure_page(self) -> Page:
+        """Ensure we have a valid page object."""
+        if not self.page and self.browser_session:
+            self.page = await self.browser_session.get_current_page()
+        return self.page
 
     async def verify_step(self, context: VerificationContext) -> bool:
         """

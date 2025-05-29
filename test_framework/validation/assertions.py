@@ -18,6 +18,11 @@ from sklearn.metrics.pairwise import cosine_similarity
 from playwright.async_api import Page
 from browser_use.agent.views import ActionResult, AgentHistoryList
 from browser_use.agent.service import Agent
+from browser_use.browser.session import BrowserSession
+from test_framework.validation.assertions.extraction import ExtractionAssertions
+from test_framework.validation.assertions.matching import MatchingAssertions
+from test_framework.validation.assertions.verification import VerificationAssertions
+from test_framework.validation.assertions.step_tracking import StepTrackingAssertions
 
 from .models import LinkExtractionResult
 from .validator import TestValidator, ValidationMode, ValidationResult
@@ -56,7 +61,7 @@ class TestAssertions:
         logger.debug(f"Initializing TestAssertions with agent and result history")
         self.agent = agent
         self.result = result
-        self.page = None
+        self.browser_session = None
         self.step_extractions = self._build_step_extraction_map()
         self.current_step = 0  # Track current step
         self.requirement_step_map = {}  # Map requirements to their steps
@@ -74,6 +79,12 @@ class TestAssertions:
         except Exception as e:
             logger.warning(f"Failed to initialize semantic model: {e}")
             self.semantic_model = None
+            
+        # Initialize assertion components
+        self.extraction_assertions = ExtractionAssertions(agent, result)
+        self.matching_assertions = MatchingAssertions(agent, result)
+        self.verification_assertions = VerificationAssertions(agent, result)
+        self.step_tracking_assertions = StepTrackingAssertions(agent, result)
             
     def _calculate_context_window(self) -> int:
         """Calculate appropriate context window based on task characteristics.
