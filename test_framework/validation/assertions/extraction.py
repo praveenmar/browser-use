@@ -89,6 +89,13 @@ class ExtractionAssertions(BaseAssertions):
         """
         logger.debug(f"Getting extraction result for requirement: {requirement}")
         
+        # Extract expected text from requirement
+        match = re.search(r'["\'](.*?)["\']', requirement)
+        if not match:
+            logger.error(f"Could not extract text from requirement: {requirement}")
+            return None
+        expected_text = match.group(1)
+        
         # Process pending extractions first
         self._process_pending_extractions(current_step)
         
@@ -101,29 +108,26 @@ class ExtractionAssertions(BaseAssertions):
             if not hasattr(action, 'extract_content') or not action.extract_content:
                 continue
                 
-            # Get the extracted text and normalize the content
+            # Get the extracted text
             content = action.extract_content
             if isinstance(content, dict):
-                # Normalize content to use consistent keys
-                normalized_content = content.copy()
-                if "quote" in normalized_content:
-                    normalized_content["text"] = normalized_content["quote"]
-                content = normalized_content
-            
+                content = content.copy()
+                if "quote" in content:
+                    content["text"] = content["quote"]
             extracted_text = self._extract_text_from_content(content)
             
             # Check for exact match
-            if requirement == extracted_text:
+            if expected_text == extracted_text:
                 logger.info(f"Found exact match in extraction: {extracted_text}")
                 return self._process_extraction_result(content)
             
             # Calculate similarity between expected text and extracted text
-            score = self._calculate_text_similarity(requirement, extracted_text)
+            score = self._calculate_text_similarity(expected_text, extracted_text)
             if score > best_score:
                 best_score = score
                 best_match = action
                 
-        if best_match and best_score > 0.6:  # Lower threshold for fuzzy matching
+        if best_match and best_score > 0.8:  # Higher threshold for fuzzy matching
             logger.info(f"Found matching extraction with score {best_score}")
             content = best_match.extract_content
             if isinstance(content, dict) and "quote" in content:
@@ -147,7 +151,7 @@ class ExtractionAssertions(BaseAssertions):
             # Create extraction action
             action_data = {
                 "extract_content": {
-                    "goal": f"Find the text: {requirement}",
+                    "goal": f"Find the exact text: {expected_text}",
                     "should_strip_link_urls": True
                 }
             }
@@ -225,16 +229,15 @@ class ExtractionAssertions(BaseAssertions):
             return content
             
         if isinstance(content, dict):
-            # Try all possible text keys
+            # First try exact_text field
+            if "exact_text" in content:
+                return content["exact_text"]
+                
+            # Then try other possible text keys
             for key in ["text", "extracted_text", "quote", "content", "page_content"]:
                 if key in content:
                     text = content[key]
                     if isinstance(text, str):
-                        # Clean up the text
-                        text = text.strip()
-                        # Remove markdown blockquote if present
-                        text = re.sub(r'^>\s*', '', text)
-                        text = re.sub(r'\s*$', '', text)
                         return text
                     elif isinstance(text, dict) and "text" in text:
                         return text["text"]
@@ -242,16 +245,8 @@ class ExtractionAssertions(BaseAssertions):
             # If no text found in specific keys, try to find any string value
             for value in content.values():
                 if isinstance(value, str):
-                    # Clean up the text
-                    value = value.strip()
-                    # Remove markdown blockquote if present
-                    value = re.sub(r'^>\s*', '', value)
-                    value = re.sub(r'\s*$', '', value)
                     return value
                     
-            # If still no text found, convert the whole dict to string
-            return str(content)
-                
         return str(content)
 
     def _calculate_text_similarity(self, text1: str, text2: str) -> float:

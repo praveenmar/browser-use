@@ -48,33 +48,6 @@ class VerificationAssertions(ExtractionAssertions, MatchingAssertions):
         """
         logger.debug(f"Verifying condition: {requirement}")
             
-        # Get extraction result
-        extraction_result = await self._get_last_extraction_result(requirement, current_step)
-        if not extraction_result:
-            return AssertionResult(
-                success=False,
-                message=f"Failed to extract content for requirement: {requirement}",
-                error_code="EXTRACTION_FAILED",
-                metadata={
-                    "requirement": requirement,
-                    "step": current_step
-                }
-            )
-            
-        # Extract text from result
-        extracted_text = self._extract_text_from_content(extraction_result.extracted_content)
-        if not extracted_text:
-            return AssertionResult(
-                success=False,
-                message=f"No text content found for requirement: {requirement}",
-                error_code="NO_CONTENT",
-                metadata={
-                    "requirement": requirement,
-                    "step": current_step,
-                    "extraction_result": extraction_result
-                }
-            )
-            
         # Extract expected text from requirement
         match = re.search(r'["\'](.*?)["\']', requirement)
         if not match:
@@ -84,13 +57,41 @@ class VerificationAssertions(ExtractionAssertions, MatchingAssertions):
                 error_code="INVALID_REQUIREMENT",
                 metadata={
                     "requirement": requirement,
-                    "step": current_step,
-                    "extracted_text": extracted_text
+                    "step": current_step
                 }
             )
         expected_text = match.group(1)
         
-        # Step 1: Try exact match first
+        # Get extraction result from controller
+        extraction_result = await self._get_last_extraction_result(requirement, current_step)
+        if not extraction_result:
+            return AssertionResult(
+                success=False,
+                message=f"Failed to extract content for requirement: {requirement}",
+                error_code="EXTRACTION_FAILED",
+                metadata={
+                    "requirement": requirement,
+                    "step": current_step,
+                    "expected_text": expected_text
+                }
+            )
+            
+        # Extract text from controller's result
+        extracted_text = self._extract_text_from_content(extraction_result.extracted_content)
+        if not extracted_text:
+            return AssertionResult(
+                success=False,
+                message=f"No text content found for requirement: {requirement}",
+                error_code="NO_CONTENT",
+                metadata={
+                    "requirement": requirement,
+                    "step": current_step,
+                    "expected_text": expected_text,
+                    "extraction_result": extraction_result
+                }
+            )
+            
+        # Try exact match first
         logger.debug(f"Attempting exact match - Expected: '{expected_text}', Actual: '{extracted_text}'")
         if expected_text == extracted_text:
             logger.info("Exact match successful")
@@ -106,7 +107,7 @@ class VerificationAssertions(ExtractionAssertions, MatchingAssertions):
                 }
             )
             
-        # Step 2: If exact match fails, try contains match
+        # If exact match fails, try contains match
         logger.debug("Exact match failed, attempting contains match")
         if expected_text in extracted_text:
             logger.info("Contains match successful")
@@ -122,28 +123,7 @@ class VerificationAssertions(ExtractionAssertions, MatchingAssertions):
                 }
             )
             
-        # Step 3: If both exact and contains matching fail, try fuzzy matching
-        logger.debug("Both exact and contains matching failed, attempting fuzzy matching")
-        similarity = self._matching._calculate_text_similarity(expected_text, extracted_text)
-        logger.debug(f"Fuzzy similarity score: {similarity}")
-        
-        # Use a lower threshold for fuzzy matching
-        if similarity >= 0.6:  # Lower threshold from 0.8 to 0.6
-            logger.info(f"Fuzzy match successful with score {similarity}")
-            return AssertionResult(
-                success=True,
-                message=f"Requirement verified successfully with fuzzy match (score: {similarity:.2f}): {requirement}",
-                metadata={
-                    "requirement": requirement,
-                    "step": current_step,
-                    "expected_text": expected_text,
-                    "extracted_text": extracted_text,
-                    "similarity": similarity,
-                    "mode": "fuzzy"
-                }
-            )
-        
-        # If all verification attempts fail
+        # If both exact and contains matching fail
         logger.warning(f"All verification attempts failed for requirement: {requirement}")
         return AssertionResult(
             success=False,
@@ -154,7 +134,6 @@ class VerificationAssertions(ExtractionAssertions, MatchingAssertions):
                 "step": current_step,
                 "expected_text": expected_text,
                 "extracted_text": extracted_text,
-                "similarity": similarity,
                 "mode": "failed"
             }
         )

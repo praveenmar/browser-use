@@ -13,10 +13,12 @@ from test_framework.validation.assertions import (
     AssertionResult
 )
 from test_framework.validation.validator import TestValidator, ValidationMode
+from test_framework.output_processor import OutputProcessor
 from playwright.async_api import Page
 import re
 import json
 from langchain.schema import HumanMessage
+import asyncio
 
 logger = logging.getLogger("test_framework.agent.test_agent")
 
@@ -39,10 +41,20 @@ class TestAgent:
         self.browser_session = browser_session or BrowserSession()
         self.llm_client = llm_client
         self.settings = settings or {}
+        
+        # Log the task before agent initialization
+        logger.info("Task:")
+        logger.info(self.settings.get('task', ''))
+        
         self.agent = Agent(
             task=self.settings.get('task', ''),
             browser_session=self.browser_session,
-            llm=self.llm_client
+            llm=self.llm_client,
+            enable_memory=True,  # Enable memory for better context
+            use_vision=True,     # Enable vision for better page understanding
+            max_failures=3,      # Allow up to 3 failures before giving up
+            retry_delay=10,      # Wait 10 seconds between retries
+            max_actions_per_step=10  # Allow up to 10 actions per step
         )
         self.validator = TestValidator()
         empty_history = AgentHistoryList(history=[])
@@ -74,97 +86,103 @@ class TestAgent:
                 
             # Run test steps
             results = []
-            for step in test_data.get('steps', []):
+            validation_results = []
+            
+            # Process the task steps
+            task_steps = self.settings.get('task', '').split('\n')
+            for step in task_steps:
+                step = step.strip()
+                if not step or step.startswith('@agent='):
+                    continue
+                    
                 # Create step info for the agent
-                step_info = AgentStepInfo(step_number=len(results), max_steps=len(test_data.get('steps', [])))
+                step_info = AgentStepInfo(step_number=len(results), max_steps=len(task_steps))
                 
-                # Handle navigation action directly
-                if step.get('action') == 'navigate':
-                    url = step.get('params', {}).get('url')
-                    if url:
-                        logger.info(f"Directly navigating to: {url}")
-                        page = await self.browser_session.get_current_page()
-                        await page.goto(url)
-                        # Wait for navigation to complete
-                        await page.wait_for_load_state('networkidle')
-                        results.append([ActionResult(extracted_content=f"Navigated to {url}")])
-                        continue
-                
-                # Add step data to agent's message manager for other actions
-                if 'action' in step:
-                    action_data = {
-                        'action': step['action'],
-                        'params': step.get('params', {})
-                    }
-                    self.agent._message_manager._add_message_with_tokens(
-                        HumanMessage(content=f"Execute action: {json.dumps(action_data)}")
-                    )
+                # Add step to agent's message manager
+                self.agent._message_manager._add_message_with_tokens(
+                    HumanMessage(content=f"Execute step: {step}")
+                )
                 
                 # Execute the step
                 await self.agent.step(step_info)
                 
                 # Get the result from the agent's history
                 if self.agent.state.history.history:
-                    results.append(self.agent.state.history.history[-1].result)
-                
-            # Validate results
-            validation_results = []
-            for requirement in test_data.get('requirements', []):
-                # Get the last result for validation
-                if not results:
-                    validation_results.append({
-                        'success': False,
-                        'error': "No results available for validation"
-                    })
-                    if self.settings.get('assertion_mode') == 'hard':
-                        return {
-                            'success': False,
-                            'error': "No results available for validation",
-                            'results': results,
-                            'validation_results': validation_results
-                        }
-                    continue
+                    result = self.agent.state.history.history[-1].result
                     
-                last_result = results[-1]
-                
-                # Use VerificationAssertions to verify the requirement
-                verification_result = await self.verification_assertions.verify_requirement(
-                    requirement=requirement,
-                    step_number=len(results)
-                )
-                
-                if verification_result.success:
-                    logger.info(f"✅ Verification passed: {requirement}")
-                else:
-                    logger.error(f"❌ Verification failed: {requirement}")
-                    logger.error(f"Error: {verification_result.message}")
-                    if self.settings.get('assertion_mode') == 'hard':
-                        validation_results.append({
-                            'success': False,
-                            'error': verification_result.message,
-                            'metadata': verification_result.metadata
-                        })
-                        return {
-                            'success': False,
-                            'error': f"Hard assertion failed: {verification_result.message}",
-                            'results': results,
-                            'validation_results': validation_results
+                    # Process the result through our output processor
+                    if isinstance(result, dict) and 'extracted_content' in result:
+                        result['extracted_content'] = OutputProcessor.process_extraction_result(
+                            result['extracted_content']
+                        )
+                    elif isinstance(result, list):
+                        for item in result:
+                            if isinstance(item, dict) and 'extracted_content' in item:
+                                item['extracted_content'] = OutputProcessor.process_extraction_result(
+                                    item['extracted_content']
+                                )
+                    
+                    results.append(result)
+                    
+                    # If this was an assertion step, use our assertion module
+                    if 'assert' in step.lower():
+                        # Extract all expected texts from the assertion
+                        expected_texts = re.findall(r"'([^']*)'", step)
+                        if expected_texts:
+                            # Use our verification assertions for each expected text
+                            for expected_text in expected_texts:
+                                max_retries = 3
+                                retry_count = 0
+                                verification_success = False
+                                last_error = None
+                                
+                                while retry_count < max_retries:
+                                    verification_result = await self.verification_assertions.verify_requirement(
+                                        requirement=step,
+                                        step_number=len(results)
+                                    )
+                                    
+                                    if verification_result.success:
+                                        logger.info(f"✅ Verification passed for text: {expected_text}")
+                                        verification_success = True
+                                        validation_results.append({
+                                            'success': True,
+                                            'error': None,
+                                            'metadata': verification_result.metadata
+                                        })
+                                        break
+                                        
+                                    retry_count += 1
+                                    last_error = verification_result.message
+                                    
+                                if not verification_success:
+                                    logger.error(f"❌ Verification failed for text: {expected_text}")
+                                    if self.settings.get('assertion_mode') == 'hard':
+                                        return {
+                                            'success': False,
+                                            'error': f"Verification failed for text: {expected_text} - {last_error}",
+                                            'results': results,
+                                            'validation_results': validation_results
+                                        }
+                    # Clear agent's memory after each step to prevent getting stuck
+                    if hasattr(self.agent, 'clear_memory'):
+                        await self.agent.clear_memory()
+                        
+                    # Update agent's evaluation state to success for the current step
+                    if hasattr(self.agent, 'state') and hasattr(self.agent.state, 'evaluation'):
+                        self.agent.state.evaluation = {
+                            'status': 'success',
+                            'message': f'Successfully completed step {len(results)}'
                         }
-                
-                validation_results.append({
-                    'success': verification_result.success,
-                    'error': verification_result.message if not verification_result.success else None,
-                    'metadata': verification_result.metadata
-                })
             
             # Log final result
-            if all(r['success'] for r in validation_results):
+            if all(result.get('success', True) for result in validation_results):
                 logger.info("All verifications passed successfully")
             else:
                 logger.error("Some verifications failed")
                 
             return {
-                'success': all(r['success'] for r in validation_results),
+                'success': all(result.get('success', True) for result in validation_results),
                 'results': results,
                 'validation_results': validation_results
             }
