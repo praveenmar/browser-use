@@ -6,6 +6,7 @@ Handles verification of different types of assertions.
 import logging
 from typing import Optional, Dict, Any, List, Tuple
 import re
+from difflib import SequenceMatcher
 
 from browser_use.agent.views import ActionResult, AgentHistoryList
 from browser_use.agent.service import Agent
@@ -107,8 +108,29 @@ class VerificationAssertions(ExtractionAssertions, MatchingAssertions):
                 }
             )
             
-        # If exact match fails, try contains match
-        logger.debug("Exact match failed, attempting contains match")
+        # Calculate similarity ratio
+        similarity = SequenceMatcher(None, expected_text, extracted_text).ratio()
+        logger.debug(f"Text similarity ratio: {similarity}")
+        
+        # If similarity is too low, fail the verification
+        if similarity < 0.95:  # 95% similarity threshold
+            logger.warning(f"Text similarity too low ({similarity:.2f}) for requirement: {requirement}")
+            return AssertionResult(
+                success=False,
+                message=f"Text similarity too low ({similarity:.2f}) for requirement: {requirement}",
+                error_code="SIMILARITY_TOO_LOW",
+                metadata={
+                    "requirement": requirement,
+                    "step": current_step,
+                    "expected_text": expected_text,
+                    "extracted_text": extracted_text,
+                    "similarity": similarity,
+                    "mode": "similarity_check"
+                }
+            )
+            
+        # If similarity is high enough, try contains match
+        logger.debug("Exact match failed but similarity is high, attempting contains match")
         if expected_text in extracted_text:
             logger.info("Contains match successful")
             return AssertionResult(
@@ -119,6 +141,7 @@ class VerificationAssertions(ExtractionAssertions, MatchingAssertions):
                     "step": current_step,
                     "expected_text": expected_text,
                     "extracted_text": extracted_text,
+                    "similarity": similarity,
                     "mode": "contains"
                 }
             )
@@ -134,6 +157,7 @@ class VerificationAssertions(ExtractionAssertions, MatchingAssertions):
                 "step": current_step,
                 "expected_text": expected_text,
                 "extracted_text": extracted_text,
+                "similarity": similarity,
                 "mode": "failed"
             }
         )

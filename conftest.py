@@ -30,5 +30,4 @@ def mock_browser_session(mocker):
     page = mocker.AsyncMock()
     session.get_current_page.return_value = page
     session.agent_current_page = page
-    session.human_current_page = page
     return session 

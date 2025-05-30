@@ -5,7 +5,7 @@ from browser_use.agent.service import Agent
 from browser_use.agent.views import ActionResult, AgentHistoryList, AgentStepInfo
 from browser_use.controller.service import Controller
 from browser_use.browser.session import BrowserSession
-from test_framework.llm.llm_client import LLMClient
+from browser_use.agent.prompts import SystemPrompt
 from test_framework.validation.assertions import (
     VerificationAssertions,
     ExtractionAssertions,
@@ -14,6 +14,7 @@ from test_framework.validation.assertions import (
 )
 from test_framework.validation.validator import TestValidator, ValidationMode
 from test_framework.output_processor import OutputProcessor
+from test_framework.agent.prompts import TestAgentPrompt
 from playwright.async_api import Page
 import re
 import json
@@ -28,7 +29,7 @@ class TestAgent:
     def __init__(
         self,
         browser_session: Optional[BrowserSession] = None,
-        llm_client: Optional[LLMClient] = None,
+        llm_client: Optional[Any] = None,
         settings: Optional[Dict[str, Any]] = None
     ):
         """Initialize test agent.
@@ -46,15 +47,15 @@ class TestAgent:
         logger.info("Task:")
         logger.info(self.settings.get('task', ''))
         
+        # Initialize test agent prompt
+        self.test_prompt = TestAgentPrompt()
+        
         self.agent = Agent(
-            task=self.settings.get('task', ''),
-            browser_session=self.browser_session,
+            task="",
             llm=self.llm_client,
-            enable_memory=True,  # Enable memory for better context
-            use_vision=True,     # Enable vision for better page understanding
-            max_failures=3,      # Allow up to 3 failures before giving up
-            retry_delay=10,      # Wait 10 seconds between retries
-            max_actions_per_step=10  # Allow up to 10 actions per step
+            browser_session=self.browser_session,
+            override_system_message=self.test_prompt.get_system_message().content,
+            max_actions_per_step=10
         )
         self.validator = TestValidator()
         empty_history = AgentHistoryList(history=[])

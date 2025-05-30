@@ -4,15 +4,16 @@ os.environ["ANONYMIZED_TELEMETRY"] = "false"
 import asyncio
 import logging
 from test_framework.agent.test_agent import TestAgent
+from test_framework.agent.step_hooks import StepHooks
 from browser_use.controller.service import Controller
 from browser_use.browser.session import BrowserSession
 from browser_use.browser import BrowserProfile
 from langchain_google_genai import ChatGoogleGenerativeAI
 from dotenv import load_dotenv
 import sys
-import json
-from typing import List, Dict, Any
 from test_framework.output_processor import OutputProcessor
+from test_framework.models.action_model import ActionModel
+from browser_use.agent.views import ActionResult
 
 # Configure logging
 logging.basicConfig(
@@ -25,6 +26,7 @@ logging.getLogger('controller').setLevel(logging.INFO)  # Keep controller logs
 logging.getLogger('test_framework.validation.assertions').setLevel(logging.INFO)  # Keep validation logs
 logging.getLogger('browser').setLevel(logging.INFO)  # Keep browser logs
 logging.getLogger('agent').setLevel(logging.INFO)  # Keep agent logs
+logging.getLogger('test_framework.agent.step_hooks').setLevel(logging.INFO)
 
 # Create a filter to exclude only extraction content
 class ExtractionFilter(logging.Filter):
@@ -40,6 +42,93 @@ controller_logger = logging.getLogger('controller')
 controller_logger.addFilter(ExtractionFilter())
 
 logger = logging.getLogger(__name__)
+
+class CustomStepHooks(StepHooks):
+    """Custom step hooks with enhanced functionality."""
+    
+    async def before_step(self, step_number: int, action: ActionModel) -> None:
+        """Enhanced before step hook with validation and setup."""
+        await super().before_step(step_number, action)
+        
+        # Validate browser state
+        if hasattr(self.agent, 'browser_session'):
+            page = await self.agent.browser_session.get_current_page()
+            if not page:
+                logger.warning(f"Browser page not ready before step {step_number}")
+                return
+                
+            # Check if page is loaded
+            try:
+                await page.wait_for_load_state('networkidle', timeout=5000)
+            except Exception as e:
+                logger.warning(f"Page not fully loaded before step {step_number}: {str(e)}")
+        
+        logger.info(f"Starting step {step_number}: {action}")
+        
+    async def after_step(self, step_number: int, action: ActionModel, result: ActionResult) -> None:
+        """Enhanced after step hook with detailed verification."""
+        await super().after_step(step_number, action, result)
+        
+        if not result.success:
+            logger.warning(f"Step {step_number} failed, attempting recovery...")
+            
+            # Try to get more context about the failure
+            if hasattr(self.agent, 'browser_session'):
+                try:
+                    page = await self.agent.browser_session.get_current_page()
+                    # Take screenshot on failure
+                    screenshot_path = f"failure_step_{step_number}.png"
+                    await page.screenshot(path=screenshot_path)
+                    logger.info(f"Failure screenshot saved to {screenshot_path}")
+                    
+                    # Get page URL for context
+                    current_url = page.url
+                    logger.info(f"Failure occurred at URL: {current_url}")
+                except Exception as e:
+                    logger.error(f"Error during failure analysis: {str(e)}")
+        
+        logger.info(f"Completed step {step_number} with result: {result.success}")
+        
+    async def on_error(self, step_number: int, action: ActionModel, error: Exception) -> None:
+        """Enhanced error handling with recovery attempts."""
+        await super().on_error(step_number, action, error)
+        
+        logger.error(f"Error in step {step_number}: {str(error)}")
+        
+        # Attempt recovery for specific error types
+        if "TimeoutError" in str(error):
+            logger.info("Timeout error detected, attempting to refresh page...")
+            if hasattr(self.agent, 'browser_session'):
+                try:
+                    page = await self.agent.browser_session.get_current_page()
+                    await page.reload()
+                    logger.info("Page refreshed successfully")
+                except Exception as e:
+                    logger.error(f"Failed to refresh page: {str(e)}")
+        
+    async def on_complete(self, success: bool) -> None:
+        """Enhanced completion hook with cleanup and reporting."""
+        await super().on_complete(success)
+        
+        # Generate test report
+        if hasattr(self.agent, 'result'):
+            total_steps = len(self.agent.result)
+            passed_steps = sum(1 for r in self.agent.result if r.success)
+            success_rate = (passed_steps / total_steps) * 100 if total_steps > 0 else 0
+            
+            logger.info(f"\nTest Summary:")
+            logger.info(f"Total Steps: {total_steps}")
+            logger.info(f"Passed Steps: {passed_steps}")
+            logger.info(f"Failed Steps: {total_steps - passed_steps}")
+            logger.info(f"Success Rate: {success_rate:.1f}%")
+        
+        # Cleanup resources
+        if hasattr(self.agent, 'browser_session'):
+            try:
+                await self.agent.browser_session.stop()
+                logger.info("Browser session closed successfully")
+            except Exception as e:
+                logger.error(f"Error closing browser session: {str(e)}")
 
 async def main():
     # Load environment variables
@@ -78,16 +167,23 @@ async def main():
             llm_client=llm,
             settings={
                 "task": """
-                   @agent=keep this in mind that you are testing a website so, follow the instructions carefully do not go beyond the instructions
-                    step 1. Navigate to http://uitestingplayground.com/home
-                    step 2. Assert that the text 'Wait for edit field to become enabled' is displayed on the page.
-                    step 3. click on 'Class Attribute' hyerlink present on the home page.
-                    step 4. Then Assert that the 'Correct variant is' text is displayed on the page.
+                   
+  @agent=keep this in mind that you are testing a website so, follow the instructions carefully do not go beyond the instructions
+                step 1. Navigate to https://www.amazon.in/
+                step 2. click on hamberger menu with the text 'All'
+                step 3. assert that the text 'Digital Content and Devices' is present.
+                step 4. click on sub nav with the text 'Amazon Prime Music'
+                step 5. Assert that the text 'Amazon Prime Msic' with aria-level=2 in sub nav
+                step 6. and select the option with text 'Amazon Prime Music' 
                     
                 """,
                 "assertion_mode": "soft"  # Use soft assertions to continue on failure
             }
         )
+        
+        # Initialize and attach custom step hooks
+        step_hooks = CustomStepHooks(agent)
+        agent.step_hooks = step_hooks
         
         logger.info("Starting test execution...")
         
@@ -167,6 +263,7 @@ async def main():
             error_msg = result.get('error', "Test failed without specific error message")
             logger.error(f"❌ Test failed: {error_msg}")
             if 'validation_results' in result:
+                import json  # Move json import here where it's actually used
                 logger.error(f"Failure details: {json.dumps(result['validation_results'], indent=2)}")
             sys.exit(1)  # Exit with error code
             
