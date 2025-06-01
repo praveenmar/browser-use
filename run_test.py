@@ -3,17 +3,22 @@ import os
 os.environ["ANONYMIZED_TELEMETRY"] = "false"
 import asyncio
 import logging
-from test_framework.agent.test_agent import TestAgent
-from test_framework.agent.step_hooks import StepHooks
-from browser_use.controller.service import Controller
+import sys
+from pathlib import Path
+from dotenv import load_dotenv
+from langchain_google_genai import ChatGoogleGenerativeAI
+
+# Add the project root to the Python path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 from browser_use.browser.session import BrowserSession
 from browser_use.browser import BrowserProfile
-from langchain_google_genai import ChatGoogleGenerativeAI
-from dotenv import load_dotenv
-import sys
+from browser_use.controller.service import Controller
+from browser_use.agent.views import ActionResult
+from test_framework.agent.test_agent import TestAgent
+from test_framework.agent.step_hooks import StepHooks
 from test_framework.output_processor import OutputProcessor
 from test_framework.models.action_model import ActionModel
-from browser_use.agent.views import ActionResult
 
 # Configure logging
 logging.basicConfig(
@@ -171,9 +176,9 @@ async def main():
   @agent=keep this in mind that you are testing a website so, follow the instructions carefully do not go beyond the instructions
                 step 1. Navigate to https://www.amazon.in/
                 step 2. click on hamberger menu with the text 'All'
-                step 3. assert that the text 'Digital Content and Devices' is present.
+                step 3. assert that the text 'Digital Content and Devices' is present at xpath "//*[@id="hmenu-content"]/div[1]/section[2]/div".
                 step 4. click on sub nav with the text 'Amazon Prime Music'
-                step 5. Assert that the text 'Amazon Prime Msic' with aria-level=2 in sub nav
+                step 5. Assert that the text 'Amazon Prime Music' in sub nav
                 step 6. and select the option with text 'Amazon Prime Music' 
                     
                 """,

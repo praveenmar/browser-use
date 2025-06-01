@@ -4,7 +4,7 @@ Handles verification of different types of assertions.
 """
 
 import logging
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List, Tuple, Union
 import re
 from difflib import SequenceMatcher
 
@@ -17,11 +17,34 @@ from .matching import MatchingAssertions
 
 logger = logging.getLogger("test_framework.validation.assertions")
 
+# Constants for similarity thresholds
+FUZZY_MATCH_THRESHOLD = 0.85
+CASE_INSENSITIVE_THRESHOLD = 1.0
+EXACT_MATCH_THRESHOLD = 1.0
+
 class VerificationAssertions(ExtractionAssertions, MatchingAssertions):
-    """Handles verification of different types of assertions"""
+    """Handles verification of different types of assertions.
+    
+    This class provides methods for verifying various types of assertions including:
+    - Text content verification
+    - List verification
+    - Link verification
+    - Attribute verification
+    
+    Each verification method follows a multi-tiered matching strategy:
+    1. Exact match
+    2. Contains match
+    3. Case-insensitive match
+    4. Fuzzy match (if enabled)
+    """
     
     def __init__(self, agent: Agent, result: AgentHistoryList):
-        """Initialize verification assertions"""
+        """Initialize verification assertions.
+        
+        Args:
+            agent: The agent instance for browser interactions
+            result: The history of agent actions
+        """
         super().__init__(agent, result)
         self._matching = MatchingAssertions(agent, result)
         
@@ -33,39 +56,43 @@ class VerificationAssertions(ExtractionAssertions, MatchingAssertions):
             step_number: The step number in the test
             
         Returns:
-            AssertionResult: Result of the verification
+            AssertionResult: Result of the verification with detailed metadata
         """
+        logger.info(f"[Step {step_number}] Verifying requirement: {requirement}")
         return await self._verify_condition(requirement, step_number)
         
-    async def _verify_condition(self, requirement: str, current_step: int) -> AssertionResult:
-        """Verify a condition or requirement.
+    async def _verify_condition(self, requirement: str, current_step: int, use_fuzzy_matching: bool = True) -> AssertionResult:
+        """Verify a condition or requirement using a multi-tiered matching strategy.
         
         Args:
             requirement: The requirement string
             current_step: Current step number
+            use_fuzzy_matching: Whether to use fuzzy matching (default: True)
             
         Returns:
-            AssertionResult: Result of the verification
+            AssertionResult: Result of the verification with detailed metadata
         """
-        logger.debug(f"Verifying condition: {requirement}")
-            
-        # Extract expected text from requirement
-        match = re.search(r'["\'](.*?)["\']', requirement)
-        if not match:
+        logger.debug(f"[Step {current_step}] Starting verification for: {requirement}")
+        
+        # Extract all quoted texts from requirement
+        quoted_texts = re.findall(r'["\'](.*?)["\']', requirement)
+        if not quoted_texts:
+            logger.error(f"[Step {current_step}] No quoted text found in requirement: {requirement}")
             return AssertionResult(
                 success=False,
                 message=f"Could not extract expected text from requirement: {requirement}",
                 error_code="INVALID_REQUIREMENT",
                 metadata={
                     "requirement": requirement,
-                    "step": current_step
+                    "step": current_step,
+                    "error_type": "missing_quoted_text"
                 }
             )
-        expected_text = match.group(1)
-        
+            
         # Get extraction result from controller
         extraction_result = await self._get_last_extraction_result(requirement, current_step)
         if not extraction_result:
+            logger.error(f"[Step {current_step}] No extraction result found for: {requirement}")
             return AssertionResult(
                 success=False,
                 message=f"Failed to extract content for requirement: {requirement}",
@@ -73,13 +100,15 @@ class VerificationAssertions(ExtractionAssertions, MatchingAssertions):
                 metadata={
                     "requirement": requirement,
                     "step": current_step,
-                    "expected_text": expected_text
+                    "expected_texts": quoted_texts,
+                    "error_type": "extraction_failed"
                 }
             )
             
         # Extract text from controller's result
         extracted_text = self._extract_text_from_content(extraction_result.extracted_content)
         if not extracted_text:
+            logger.error(f"[Step {current_step}] No text content found in extraction for: {requirement}")
             return AssertionResult(
                 success=False,
                 message=f"No text content found for requirement: {requirement}",
@@ -87,92 +116,64 @@ class VerificationAssertions(ExtractionAssertions, MatchingAssertions):
                 metadata={
                     "requirement": requirement,
                     "step": current_step,
-                    "expected_text": expected_text,
-                    "extraction_result": extraction_result
+                    "expected_texts": quoted_texts,
+                    "extraction_result": extraction_result,
+                    "error_type": "no_content"
                 }
             )
             
-        # Try exact match first
-        logger.debug(f"Attempting exact match - Expected: '{expected_text}', Actual: '{extracted_text}'")
-        if expected_text == extracted_text:
-            logger.info("Exact match successful")
+        # Track results for each quoted text
+        results = []
+        all_success = True
+        
+        for expected_text in quoted_texts:
+            logger.debug(f"[Step {current_step}] Processing expected text: '{expected_text}'")
+            
+            # Use the new match_text method
+            match_result = self._matching.match_text(expected_text, extracted_text, use_fuzzy_matching)
+            match_result["expected_text"] = expected_text
+            results.append(match_result)
+            
+            if not match_result["success"]:
+                all_success = False
+            
+        # Create final assertion result
+        metadata = {
+            "requirement": requirement,
+            "step": current_step,
+            "extracted_text": extracted_text,
+            "match_results": results,
+            "use_fuzzy_matching": use_fuzzy_matching,
+            "verification_type": "text"
+        }
+        
+        if all_success:
+            logger.info(f"[Step {current_step}] Requirement verified successfully: {requirement}")
             return AssertionResult(
                 success=True,
-                message=f"Requirement verified successfully with exact match: {requirement}",
-                metadata={
-                    "requirement": requirement,
-                    "step": current_step,
-                    "expected_text": expected_text,
-                    "extracted_text": extracted_text,
-                    "mode": "exact"
-                }
+                message=f"Requirement verified successfully: {requirement}",
+                metadata=metadata
             )
-            
-        # Calculate similarity ratio
-        similarity = SequenceMatcher(None, expected_text, extracted_text).ratio()
-        logger.debug(f"Text similarity ratio: {similarity}")
-        
-        # If similarity is too low, fail the verification
-        if similarity < 0.95:  # 95% similarity threshold
-            logger.warning(f"Text similarity too low ({similarity:.2f}) for requirement: {requirement}")
+        else:
+            logger.error(f"[Step {current_step}] Failed to verify requirement: {requirement}")
             return AssertionResult(
                 success=False,
-                message=f"Text similarity too low ({similarity:.2f}) for requirement: {requirement}",
-                error_code="SIMILARITY_TOO_LOW",
-                metadata={
-                    "requirement": requirement,
-                    "step": current_step,
-                    "expected_text": expected_text,
-                    "extracted_text": extracted_text,
-                    "similarity": similarity,
-                    "mode": "similarity_check"
-                }
+                message=f"Failed to verify requirement: {requirement}",
+                error_code="VERIFICATION_FAILED",
+                metadata=metadata
             )
             
-        # If similarity is high enough, try contains match
-        logger.debug("Exact match failed but similarity is high, attempting contains match")
-        if expected_text in extracted_text:
-            logger.info("Contains match successful")
-            return AssertionResult(
-                success=True,
-                message=f"Requirement verified successfully with contains match: {requirement}",
-                metadata={
-                    "requirement": requirement,
-                    "step": current_step,
-                    "expected_text": expected_text,
-                    "extracted_text": extracted_text,
-                    "similarity": similarity,
-                    "mode": "contains"
-                }
-            )
-            
-        # If both exact and contains matching fail
-        logger.warning(f"All verification attempts failed for requirement: {requirement}")
-        return AssertionResult(
-            success=False,
-            message=f"Failed to verify requirement: {requirement}",
-            error_code="VERIFICATION_FAILED",
-            metadata={
-                "requirement": requirement,
-                "step": current_step,
-                "expected_text": expected_text,
-                "extracted_text": extracted_text,
-                "similarity": similarity,
-                "mode": "failed"
-            }
-        )
-        
     def _process_list_requirement(self, requirement: str, current_step: int) -> AssertionResult:
-        """Process a list-based requirement.
+        """Process a list-based requirement using a multi-tiered matching strategy.
         
         Args:
             requirement: The requirement string
             current_step: Current step number
             
         Returns:
-            AssertionResult: Result of the verification
+            AssertionResult: Result of the verification with detailed metadata
         """
-        logger.debug(f"Processing list requirement: {requirement}")
+        logger.info(f"[Step {current_step}] Processing list requirement: {requirement}")
         
         # Extract expected items
         expected_items = []
@@ -200,31 +201,48 @@ class VerificationAssertions(ExtractionAssertions, MatchingAssertions):
             expected_items = [items_text]
             
         if not expected_items:
+            logger.error(f"[Step {current_step}] No items found in list requirement: {requirement}")
             return AssertionResult(
                 success=False,
                 error_code="INVALID_REQUIREMENT",
                 message="No items found in list requirement",
-                metadata={"requirement": requirement}
+                metadata={
+                    "requirement": requirement,
+                    "step": current_step,
+                    "error_type": "no_items"
+                }
             )
             
         # Get extraction result
         extraction_result = self._get_last_extraction_result(requirement, current_step)
         if not extraction_result:
+            logger.error(f"[Step {current_step}] No extraction found for list requirement: {requirement}")
             return AssertionResult(
                 success=False,
                 error_code="NO_EXTRACTION",
                 message="No extraction found for list requirement",
-                metadata={"requirement": requirement, "expected_items": expected_items}
+                metadata={
+                    "requirement": requirement,
+                    "step": current_step,
+                    "expected_items": expected_items,
+                    "error_type": "no_extraction"
+                }
             )
             
         # Parse content
         content_info = self._parse_extracted_content(extraction_result.extracted_content, "list")
         if not content_info["value"]:
+            logger.error(f"[Step {current_step}] Failed to parse content for list requirement: {requirement}")
             return AssertionResult(
                 success=False,
                 error_code="PARSE_ERROR",
                 message=f"Failed to parse content: {content_info['parsing_error']}",
-                metadata={"requirement": requirement, "content_info": content_info}
+                metadata={
+                    "requirement": requirement,
+                    "step": current_step,
+                    "content_info": content_info,
+                    "error_type": "parse_error"
+                }
             )
             
         # Extract items
@@ -239,16 +257,81 @@ class VerificationAssertions(ExtractionAssertions, MatchingAssertions):
         else:
             actual_items = [self._extract_text_from_content(content_info["value"])]
             
-        # Create metadata
-        metadata = self._create_metadata(requirement, expected_items, content_info)
-        metadata.update({
+        # Track results for each expected item
+        results = []
+        all_success = True
+        
+        for expected_item in expected_items:
+            logger.debug(f"[Step {current_step}] Processing expected item: '{expected_item}'")
+            result = {
+                "expected_text": expected_item,
+                "match_type": None,
+                "similarity_score": None,
+                "matched_snippet": None,
+                "success": False
+            }
+            
+            best_match = None
+            best_score = 0.0
+            best_match_type = None
+            
+            # Try to find best match for this item
+            for actual_item in actual_items:
+                # Use the new match_text method
+                match_result = self._matching.match_text(expected_item, actual_item)
+                if match_result["success"] and match_result["similarity_score"] > best_score:
+                    best_match = actual_item
+                    best_score = match_result["similarity_score"]
+                    best_match_type = match_result["match_type"]
+                    
+            # Update result with best match found
+            if best_match:
+                result.update({
+                    "match_type": best_match_type,
+                    "similarity_score": best_score,
+                    "matched_snippet": best_match,
+                    "success": True
+                })
+                logger.info(f"[Step {current_step}] Found {best_match_type} match for '{expected_item}' with score {best_score:.2f}")
+            else:
+                logger.warning(f"[Step {current_step}] No match found for item: '{expected_item}'")
+                result.update({
+                    "match_type": "no_match",
+                    "success": False
+                })
+                all_success = False
+                
+            results.append(result)
+            
+        # Create final assertion result
+        metadata = {
+            "requirement": requirement,
+            "step": current_step,
             "match_all": match_all,
             "expected_items": expected_items,
-            "actual_items": actual_items
-        })
+            "actual_items": actual_items,
+            "match_results": results,
+            "verification_type": "list"
+        }
         
-        # Verify list match
-        return self._verify_list_match(expected_items, actual_items, match_all)
+        # Determine overall success based on match_all flag
+        overall_success = all_success if match_all else any(r["success"] for r in results)
+        
+        if overall_success:
+            logger.info(f"[Step {current_step}] List requirement verified successfully: {requirement}")
+            return AssertionResult(
+                success=True,
+                message=f"List requirement verified successfully: {requirement}",
+                metadata=metadata
+            )
+        else:
+            logger.error(f"[Step {current_step}] Failed to verify list requirement: {requirement}")
+            return AssertionResult(
+                success=False,
+                message=f"Failed to verify list requirement: {requirement}",
+                error_code="VERIFICATION_FAILED",
+                metadata=metadata
+            )
         
     def _verify_link(self, requirement: str, current_step: int) -> AssertionResult:
         """Verify a link requirement.
@@ -258,9 +341,9 @@ class VerificationAssertions(ExtractionAssertions, MatchingAssertions):
             current_step: Current step number
             
         Returns:
-            AssertionResult: Result of the verification
+            AssertionResult: Result of the verification with detailed metadata
         """
-        logger.debug(f"Verifying link requirement: {requirement}")
+        logger.info(f"[Step {current_step}] Processing link requirement: {requirement}")
         
         # Extract link text
         link_text = requirement.lower().replace("verify link", "").strip()
@@ -268,21 +351,33 @@ class VerificationAssertions(ExtractionAssertions, MatchingAssertions):
         # Get extraction result
         extraction_result = self._get_last_extraction_result(requirement, current_step)
         if not extraction_result:
+            logger.error(f"[Step {current_step}] No extraction found for link requirement: {requirement}")
             return AssertionResult(
                 success=False,
                 error_code="NO_EXTRACTION",
                 message="No extraction found for link requirement",
-                metadata={"requirement": requirement, "link_text": link_text}
+                metadata={
+                    "requirement": requirement,
+                    "step": current_step,
+                    "link_text": link_text,
+                    "error_type": "no_extraction"
+                }
             )
             
         # Parse content
         content_info = self._parse_extracted_content(extraction_result.extracted_content, "link")
         if not content_info["value"]:
+            logger.error(f"[Step {current_step}] Failed to parse content for link requirement: {requirement}")
             return AssertionResult(
                 success=False,
                 error_code="PARSE_ERROR",
                 message=f"Failed to parse content: {content_info['parsing_error']}",
-                metadata={"requirement": requirement, "content_info": content_info}
+                metadata={
+                    "requirement": requirement,
+                    "step": current_step,
+                    "content_info": content_info,
+                    "error_type": "parse_error"
+                }
             )
             
         # Extract link
@@ -296,24 +391,34 @@ class VerificationAssertions(ExtractionAssertions, MatchingAssertions):
                 link = content_info["value"]["url"]
                 
         if not link:
+            logger.error(f"[Step {current_step}] No link found in extraction for: {requirement}")
             return AssertionResult(
                 success=False,
                 error_code="NO_LINK",
                 message="No link found in extraction",
-                metadata={"requirement": requirement, "content_info": content_info}
+                metadata={
+                    "requirement": requirement,
+                    "step": current_step,
+                    "content_info": content_info,
+                    "error_type": "no_link"
+                }
             )
             
         # Normalize link
         link = self._normalize_url(link)
         
         # Create metadata
-        metadata = self._create_metadata(requirement, link_text, content_info)
-        metadata.update({
+        metadata = {
+            "requirement": requirement,
+            "step": current_step,
             "link_text": link_text,
-            "link": link
-        })
+            "link": link,
+            "content_info": content_info,
+            "verification_type": "link"
+        }
         
         # Verify link
+        logger.info(f"[Step {current_step}] Link requirement verified successfully: {requirement}")
         return AssertionResult(
             success=True,
             message=f"Found link: {link}",
@@ -328,18 +433,23 @@ class VerificationAssertions(ExtractionAssertions, MatchingAssertions):
             current_step: Current step number
             
         Returns:
-            AssertionResult: Result of the verification
+            AssertionResult: Result of the verification with detailed metadata
         """
-        logger.debug(f"Verifying attribute requirement: {requirement}")
+        logger.info(f"[Step {current_step}] Processing attribute requirement: {requirement}")
         
         # Extract attribute and value
         attr_match = re.search(r"verify attribute (\w+)(?:\s*=\s*['\"]([^'\"]+)['\"])?", requirement)
         if not attr_match:
+            logger.error(f"[Step {current_step}] Invalid attribute requirement format: {requirement}")
             return AssertionResult(
                 success=False,
                 error_code="INVALID_REQUIREMENT",
                 message="Invalid attribute requirement format",
-                metadata={"requirement": requirement}
+                metadata={
+                    "requirement": requirement,
+                    "step": current_step,
+                    "error_type": "invalid_format"
+                }
             )
             
         attr_name = attr_match.group(1)
@@ -348,21 +458,33 @@ class VerificationAssertions(ExtractionAssertions, MatchingAssertions):
         # Get extraction result
         extraction_result = self._get_last_extraction_result(requirement, current_step)
         if not extraction_result:
+            logger.error(f"[Step {current_step}] No extraction found for attribute requirement: {requirement}")
             return AssertionResult(
                 success=False,
                 error_code="NO_EXTRACTION",
                 message="No extraction found for attribute requirement",
-                metadata={"requirement": requirement, "attribute": attr_name}
+                metadata={
+                    "requirement": requirement,
+                    "step": current_step,
+                    "attribute": attr_name,
+                    "error_type": "no_extraction"
+                }
             )
             
         # Parse content
         content_info = self._parse_extracted_content(extraction_result.extracted_content, "attribute")
         if not content_info["value"]:
+            logger.error(f"[Step {current_step}] Failed to parse content for attribute requirement: {requirement}")
             return AssertionResult(
                 success=False,
                 error_code="PARSE_ERROR",
                 message=f"Failed to parse content: {content_info['parsing_error']}",
-                metadata={"requirement": requirement, "content_info": content_info}
+                metadata={
+                    "requirement": requirement,
+                    "step": current_step,
+                    "content_info": content_info,
+                    "error_type": "parse_error"
+                }
             )
             
         # Extract attribute value
@@ -374,28 +496,55 @@ class VerificationAssertions(ExtractionAssertions, MatchingAssertions):
                 actual_value = content_info["value"]["attributes"][attr_name]
                 
         if actual_value is None:
+            logger.error(f"[Step {current_step}] Attribute {attr_name} not found in: {requirement}")
             return AssertionResult(
                 success=False,
                 error_code="NO_ATTRIBUTE",
                 message=f"Attribute {attr_name} not found",
-                metadata={"requirement": requirement, "content_info": content_info}
+                metadata={
+                    "requirement": requirement,
+                    "step": current_step,
+                    "content_info": content_info,
+                    "error_type": "no_attribute"
+                }
             )
             
         # Create metadata
-        metadata = self._create_metadata(requirement, expected_value, content_info)
-        metadata.update({
+        metadata = {
+            "requirement": requirement,
+            "step": current_step,
             "attribute": attr_name,
             "expected_value": expected_value,
-            "actual_value": actual_value
-        })
+            "actual_value": actual_value,
+            "content_info": content_info,
+            "verification_type": "attribute"
+        }
         
         # If no expected value, just verify attribute exists
         if not expected_value:
+            logger.info(f"[Step {current_step}] Attribute requirement verified successfully: {requirement}")
             return AssertionResult(
                 success=True,
                 message=f"Found attribute {attr_name}",
                 metadata=metadata
             )
             
-        # Verify attribute value
-        return self._verify_text_match(expected_value, str(actual_value)) 
+        # Verify attribute value using the new match_text method
+        match_result = self._matching.match_text(expected_value, str(actual_value))
+        metadata["match_result"] = match_result
+        
+        if match_result["success"]:
+            logger.info(f"[Step {current_step}] Attribute requirement verified successfully: {requirement}")
+            return AssertionResult(
+                success=True,
+                message=f"Attribute {attr_name} matches expected value",
+                metadata=metadata
+            )
+        else:
+            logger.error(f"[Step {current_step}] Failed to verify attribute requirement: {requirement}")
+            return AssertionResult(
+                success=False,
+                message=f"Attribute {attr_name} does not match expected value",
+                error_code="VERIFICATION_FAILED",
+                metadata=metadata
+            ) 

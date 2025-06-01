@@ -77,17 +77,20 @@ class ExtractionAssertions(BaseAssertions):
             
             logger.debug(f"Processed extraction for step {i}: {content}")
             
-    async def _get_last_extraction_result(self, requirement: str, current_step: int) -> Optional[ActionResult]:
+    async def _get_last_extraction_result(self, requirement: str, current_step: int, xpath: Optional[str] = None) -> Optional[ActionResult]:
         """Get the most relevant extraction result for a requirement.
         
         Args:
             requirement: The requirement string
             current_step: Current step number
+            xpath: Optional XPath to target specific elements
             
         Returns:
             Optional[ActionResult]: Most relevant extraction result or None
         """
         logger.debug(f"Getting extraction result for requirement: {requirement}")
+        if xpath:
+            logger.debug(f"Using XPath target: {xpath}")
         
         # Extract expected text from requirement
         match = re.search(r'["\'](.*?)["\']', requirement)
@@ -114,6 +117,29 @@ class ExtractionAssertions(BaseAssertions):
                 content = content.copy()
                 if "quote" in content:
                     content["text"] = content["quote"]
+                    
+                # If XPath is provided, try to find matching element
+                if xpath and "elements" in content:
+                    elements = content.get("elements", [])
+                    matching_element = None
+                    
+                    # Look for element with matching XPath
+                    for element in elements:
+                        if isinstance(element, dict) and element.get("xpath") == xpath:
+                            matching_element = element
+                            break
+                            
+                    if matching_element:
+                        # Update content with the matching element's text
+                        if "text" in matching_element:
+                            content["text"] = matching_element["text"]
+                        elif "value" in matching_element:
+                            content["text"] = matching_element["value"]
+                        logger.debug(f"Found element matching XPath: {xpath}")
+                    else:
+                        logger.debug(f"No element found matching XPath: {xpath}")
+                        continue
+                        
             extracted_text = self._extract_text_from_content(content)
             
             # Check for exact match
@@ -155,6 +181,11 @@ class ExtractionAssertions(BaseAssertions):
                     "should_strip_link_urls": True
                 }
             }
+            
+            # Add XPath if provided
+            if xpath:
+                action_data["extract_content"]["xpath"] = xpath
+                logger.debug(f"Added XPath to extraction action: {xpath}")
             
             # Create ActionModel instance
             from browser_use.agent.views import ActionModel
@@ -217,73 +248,131 @@ class ExtractionAssertions(BaseAssertions):
         return f"{parsed.scheme}://{parsed.netloc}{path}"
         
     def _extract_text_from_content(self, content: Any) -> str:
-        """Extract text content from various formats.
+        """Extract text content from various formats, including deeply nested structures.
         
         Args:
-            content: Content to extract text from
+            content: Content to extract text from (can be string, dict, list, or any nested combination)
             
         Returns:
-            str: Extracted text
+            str: Extracted text, with all string values from nested structures combined
         """
-        if isinstance(content, str):
-            return content
+        def extract_strings(value: Any) -> List[str]:
+            """Recursively extract all string values from nested structures."""
+            strings = []
             
-        if isinstance(content, dict):
-            # First try exact_text field
-            if "exact_text" in content:
-                return content["exact_text"]
+            if isinstance(value, str):
+                strings.append(value)
+            elif isinstance(value, dict):
+                # First check for known text keys
+                for key in ["exact_text", "text", "extracted_text", "quote", "content", "page_content"]:
+                    if key in value:
+                        text = value[key]
+                        if isinstance(text, str):
+                            strings.append(text)
+                        else:
+                            strings.extend(extract_strings(text))
                 
-            # Then try other possible text keys
-            for key in ["text", "extracted_text", "quote", "content", "page_content"]:
-                if key in content:
-                    text = content[key]
-                    if isinstance(text, str):
-                        return text
-                    elif isinstance(text, dict) and "text" in text:
-                        return text["text"]
-                        
-            # If no text found in specific keys, try to find any string value
-            for value in content.values():
-                if isinstance(value, str):
-                    return value
-                    
-        return str(content)
+                # Then recursively process all values
+                for val in value.values():
+                    strings.extend(extract_strings(val))
+            elif isinstance(value, list):
+                # Process each item in the list
+                for item in value:
+                    strings.extend(extract_strings(item))
+            elif value is not None:
+                # Convert any other type to string
+                strings.append(str(value))
+                
+            return strings
+            
+        # Extract all strings and join them with spaces
+        strings = extract_strings(content)
+        if not strings:
+            return str(content)  # Fallback to string conversion if no strings found
+            
+        # Join all strings with spaces and clean up whitespace
+        text = " ".join(strings)
+        text = " ".join(text.split())  # Normalize whitespace
+        return text
 
-    def _calculate_text_similarity(self, text1: str, text2: str) -> float:
+    def _calculate_text_similarity(self, text1: str, text2: str | dict) -> float:
         """Calculate similarity between two texts.
         
         Args:
-            text1: First text
-            text2: Second text
+            text1: First text to compare
+            text2: Second text to compare (can be string or dict)
             
         Returns:
             float: Similarity score between 0 and 1
         """
-        # Normalize texts
-        text1 = text1.lower().strip()
-        text2 = text2.lower().strip()
+        # Normalize input texts
+        text1 = ' '.join(text1.lower().split())
         
-        # Remove common variations
-        text1 = text1.replace(" and ", " ").replace(",", "")
-        text2 = text2.replace(" and ", " ").replace(",", "")
+        def normalize_text(text: str) -> str:
+            """Normalize text by removing extra whitespace and converting to lowercase."""
+            return ' '.join(text.lower().split())
+            
+        def check_dict_match(d: dict, search_text: str) -> float:
+            """Recursively check dictionary for matches."""
+            # First check keys for exact match
+            for key in d.keys():
+                key_norm = normalize_text(key)
+                if search_text == key_norm:
+                    return 1.0
+                    
+            # Then check keys for contains
+            for key in d.keys():
+                key_norm = normalize_text(key)
+                if search_text in key_norm or key_norm in search_text:
+                    return 1.0
+                    
+            # Then check values for exact match
+            for value in d.values():
+                if isinstance(value, str):
+                    value_norm = normalize_text(value)
+                    if search_text == value_norm:
+                        return 1.0
+                elif isinstance(value, dict):
+                    # Recursively check nested dictionaries
+                    score = check_dict_match(value, search_text)
+                    if score == 1.0:
+                        return 1.0
+                        
+            # Then check values for contains
+            for value in d.values():
+                if isinstance(value, str):
+                    value_norm = normalize_text(value)
+                    if search_text in value_norm or value_norm in search_text:
+                        return 1.0
+                        
+            # If no exact or contains match found, calculate similarity for keys
+            from difflib import SequenceMatcher
+            best_similarity = 0.0
+            for key in d.keys():
+                key_norm = normalize_text(key)
+                # Only calculate similarity if:
+                # 1. The key is similar in length (within 2 characters)
+                # 2. The key shares at least one word with the search text
+                if (abs(len(search_text) - len(key_norm)) <= 2 and
+                    any(word in key_norm for word in search_text.split())):
+                    similarity = SequenceMatcher(None, search_text, key_norm).ratio()
+                    best_similarity = max(best_similarity, similarity)
+            return best_similarity
+            
+        # Handle dictionary input
+        if isinstance(text2, dict):
+            return check_dict_match(text2, text1)
+            
+        # Handle string input
+        text2 = normalize_text(text2)
         
-        # Exact match
+        # Check for exact match
         if text1 == text2:
             return 1.0
             
-        # Check if one text contains the other
+        # Check if one contains the other
         if text1 in text2 or text2 in text1:
-            return 0.9
+            return 1.0
             
-        # Split into words and compare
-        words1 = set(text1.split())
-        words2 = set(text2.split())
-        
-        # Calculate Jaccard similarity
-        intersection = len(words1.intersection(words2))
-        union = len(words1.union(words2))
-        
-        if union == 0:
-            return 0.0
-            
-        return intersection / union 
+        # If no match found, return 0
+        return 0.0 
