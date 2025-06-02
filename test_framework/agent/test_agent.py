@@ -20,6 +20,8 @@ import re
 import json
 from langchain.schema import HumanMessage
 import asyncio
+import time
+from datetime import datetime
 
 logger = logging.getLogger("test_framework.agent.test_agent")
 
@@ -90,6 +92,9 @@ class TestAgent:
         Returns:
             Dict[str, Any]: Test results
         """
+        start_time = time.time()
+        start_datetime = datetime.now()
+        
         try:
             # Start browser session if not already initialized
             if not self.browser_session.initialized:
@@ -198,6 +203,11 @@ class TestAgent:
                     'success': True
                 })
             
+            # Calculate duration
+            end_time = time.time()
+            end_datetime = datetime.now()
+            duration_seconds = end_time - start_time
+            
             # Log final result
             total_assertions = len(validation_results)
             passed_assertions = sum(1 for r in validation_results if r.get('success', False))
@@ -207,19 +217,37 @@ class TestAgent:
             else:
                 logger.error(f"Some verifications failed ({passed_assertions}/{total_assertions})")
                 
+            logger.info(f"Test completed in {duration_seconds:.2f} seconds")
+                
             return {
                 'success': all(result.get('success', True) for result in validation_results),
                 'results': results,
                 'validation_results': validation_results,
                 'total_assertions': total_assertions,
-                'passed_assertions': passed_assertions
+                'passed_assertions': passed_assertions,
+                'duration': {
+                    'seconds': duration_seconds,
+                    'start_time': start_datetime.isoformat(),
+                    'end_time': end_datetime.isoformat()
+                }
             }
             
         except Exception as e:
+            end_time = time.time()
+            end_datetime = datetime.now()
+            duration_seconds = end_time - start_time
+            
             logger.error(f"Error running test: {str(e)}")
+            logger.error(f"Test failed after {duration_seconds:.2f} seconds")
+            
             return {
                 'success': False,
-                'error': str(e)
+                'error': str(e),
+                'duration': {
+                    'seconds': duration_seconds,
+                    'start_time': start_datetime.isoformat(),
+                    'end_time': end_datetime.isoformat()
+                }
             }
             
     async def verify_text(self, action_result: ActionResult, expected_text: str) -> AssertionResult:
