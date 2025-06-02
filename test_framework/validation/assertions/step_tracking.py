@@ -31,7 +31,8 @@ class StepTrackingAssertions(MatchingAssertions):
         super().__init__(agent, result)
         self._step_contexts: Dict[int, StepContext] = {}
         self._current_step = 0
-        self._step_context_window = 2
+        self._step_context_window = 3  # Increased from 2 to 3 for better context
+        self._last_navigation_step = -1
         
     def _build_step_extraction_map(self, current_step: int) -> Dict[str, Any]:
         """Build a map of extractions for the current step and context window.
@@ -75,36 +76,47 @@ class StepTrackingAssertions(MatchingAssertions):
             
         return extraction_map
         
-    def _update_step_context(self, step_number: int, requirements: List[str]) -> None:
-        """Update context for a step.
+    def update_step_context(self, step_number: int, requirements: List[str], extractions: Dict[str, Any], assertions: List[AssertionResult]):
+        """Update the context for a step.
         
         Args:
-            step_number: Step number to update
-            requirements: List of requirements for the step
+            step_number: Step number
+            requirements: List of requirements
+            extractions: Map of extractions
+            assertions: List of assertions
         """
-        logger.debug(f"Updating context for step {step_number}")
-        
-        # Build extraction map
-        extraction_map = self._build_step_extraction_map(step_number)
-        
-        # Create or update context
         self._step_contexts[step_number] = StepContext(
             step_number=step_number,
             requirements=requirements,
-            extractions=extraction_map,
-            assertions=[]
+            extractions=extractions,
+            assertions=assertions
         )
         
-    def _get_step_context(self, step_number: int) -> Optional[StepContext]:
-        """Get context for a step.
+        # Update current step
+        self._current_step = step_number
+        
+        # Check if this was a navigation step
+        if any('navigate' in req.lower() for req in requirements):
+            self._last_navigation_step = step_number
+            
+    def get_step_context(self, step_number: int) -> Optional[StepContext]:
+        """Get the context for a step.
         
         Args:
-            step_number: Step number to get context for
+            step_number: Step number
             
         Returns:
             Optional[StepContext]: Step context if available
         """
         return self._step_contexts.get(step_number)
+        
+    def get_last_navigation_step(self) -> int:
+        """Get the last navigation step number.
+        
+        Returns:
+            int: Last navigation step number
+        """
+        return self._last_navigation_step
         
     def _get_previous_extractions(self, current_step: int, requirement: str) -> List[Tuple[int, Any]]:
         """Get extractions from previous steps that might be relevant.
@@ -214,7 +226,7 @@ class StepTrackingAssertions(MatchingAssertions):
         Returns:
             bool: True if step is complete
         """
-        context = self._get_step_context(step_number)
+        context = self.get_step_context(step_number)
         if not context:
             return False
             

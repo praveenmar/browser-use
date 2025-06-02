@@ -71,6 +71,16 @@ class TestAgent:
         """Stop the test agent."""
         await self.browser_session.stop()
         
+    async def wait_for_dom_stability(self):
+        """Wait for the DOM to be stable before running assertions."""
+        try:
+            if hasattr(self.agent, 'browser_session') and self.agent.browser_session.page:
+                logger.debug("Waiting for DOM stability...")
+                await self.agent.browser_session.page.wait_for_load_state('networkidle')
+                logger.debug("DOM is stable")
+        except Exception as e:
+            logger.warning(f"Error waiting for DOM stability: {e}")
+        
     async def run_test(self, test_data: Dict[str, Any]) -> Dict[str, Any]:
         """Run a test with the given data.
         
@@ -107,85 +117,102 @@ class TestAgent:
                 # Execute the step
                 await self.agent.step(step_info)
                 
-                # Get the result from the agent's history
-                if self.agent.state.history.history:
-                    result = self.agent.state.history.history[-1].result
+                # Check if this step requires validation
+                if 'assert' in step.lower():
+                    # Wait for DOM stability before validation
+                    await self.wait_for_dom_stability()
                     
-                    # Process the result through our output processor
-                    if isinstance(result, dict) and 'extracted_content' in result:
-                        result['extracted_content'] = OutputProcessor.process_extraction_result(
-                            result['extracted_content']
+                    # Clear extraction cache before validation
+                    if hasattr(self.extraction_assertions, '_extraction_cache'):
+                        self.extraction_assertions._extraction_cache.clear()
+                    
+                    # Perform validation
+                    verification_success = True
+                    last_error = None
+                    
+                    # Extract expected text from assertion
+                    expected_text = None
+                    
+                    # Try different patterns for assertion text
+                    patterns = [
+                        r"assert that the text '([^']*)'",  # Standard format
+                        r"assert thst the text '([^']*)'",  # Common typo
+                        r"assert that '([^']*)'",          # Short format
+                        r"assert thst '([^']*)'",          # Short format with typo
+                        r"under the text [^']* assert thst '([^']*)'",  # Under text format
+                        r"assert that the ([^']*) is present",  # Is present format
+                        r"assert thst the ([^']*) is present"   # Is present format with typo
+                    ]
+                    
+                    for pattern in patterns:
+                        match = re.search(pattern, step.lower())
+                        if match:
+                            expected_text = match.group(1)
+                            break
+                            
+                    if expected_text:
+                        # Verify the text
+                        verification_success, last_error = await self.verification_assertions.verify_text(
+                            expected_text,
+                            step
                         )
-                    elif isinstance(result, list):
-                        for item in result:
-                            if isinstance(item, dict) and 'extracted_content' in item:
-                                item['extracted_content'] = OutputProcessor.process_extraction_result(
-                                    item['extracted_content']
-                                )
-                    
-                    results.append(result)
-                    
-                    # If this was an assertion step, use our assertion module
-                    if 'assert' in step.lower():
-                        # Extract all expected texts from the assertion
-                        expected_texts = re.findall(r"'([^']*)'", step)
-                        if expected_texts:
-                            # Use our verification assertions for each expected text
-                            for expected_text in expected_texts:
-                                max_retries = 3
-                                retry_count = 0
-                                verification_success = False
-                                last_error = None
-                                
-                                while retry_count < max_retries:
-                                    verification_result = await self.verification_assertions.verify_requirement(
-                                        requirement=step,
-                                        step_number=len(results)
-                                    )
-                                    
-                                    if verification_result.success:
-                                        logger.info(f"✅ Verification passed for text: {expected_text}")
-                                        verification_success = True
-                                        validation_results.append({
-                                            'success': True,
-                                            'error': None,
-                                            'metadata': verification_result.metadata
-                                        })
-                                        break
-                                        
-                                    retry_count += 1
-                                    last_error = verification_result.message
-                                    
-                                if not verification_success:
-                                    logger.error(f"❌ Verification failed for text: {expected_text}")
-                                    if self.settings.get('assertion_mode') == 'hard':
-                                        return {
-                                            'success': False,
-                                            'error': f"Verification failed for text: {expected_text} - {last_error}",
-                                            'results': results,
-                                            'validation_results': validation_results
-                                        }
-                    # Clear agent's memory after each step to prevent getting stuck
-                    if hasattr(self.agent, 'clear_memory'):
-                        await self.agent.clear_memory()
                         
-                    # Update agent's evaluation state to success for the current step
-                    if hasattr(self.agent, 'state') and hasattr(self.agent.state, 'evaluation'):
-                        self.agent.state.evaluation = {
-                            'status': 'success',
-                            'message': f'Successfully completed step {len(results)}'
-                        }
+                        if verification_success:
+                            logger.info(f"✅ Verification passed for text: {expected_text}")
+                            validation_results.append({
+                                'step': len(results),
+                                'success': True,
+                                'text': expected_text
+                            })
+                        else:
+                            logger.error(f"❌ Verification failed for text: {expected_text}")
+                            validation_results.append({
+                                'step': len(results),
+                                'success': False,
+                                'text': expected_text,
+                                'error': last_error
+                            })
+                            
+                            if self.settings.get('assertion_mode') == 'hard':
+                                return {
+                                    'success': False,
+                                    'error': f"Verification failed for text: {expected_text} - {last_error}",
+                                    'results': results,
+                                    'validation_results': validation_results
+                                }
+                
+                # Clear agent's memory after each step to prevent getting stuck
+                if hasattr(self.agent, 'clear_memory'):
+                    await self.agent.clear_memory()
+                    
+                # Update agent's evaluation state to success for the current step
+                if hasattr(self.agent, 'state') and hasattr(self.agent.state, 'evaluation'):
+                    self.agent.state.evaluation = {
+                        'status': 'success',
+                        'message': f'Successfully completed step {len(results)}'
+                    }
+                    
+                # Add step result
+                results.append({
+                    'step': len(results),
+                    'success': True
+                })
             
             # Log final result
-            if all(result.get('success', True) for result in validation_results):
-                logger.info("All verifications passed successfully")
+            total_assertions = len(validation_results)
+            passed_assertions = sum(1 for r in validation_results if r.get('success', False))
+            
+            if passed_assertions == total_assertions:
+                logger.info(f"All verifications passed successfully ({passed_assertions}/{total_assertions})")
             else:
-                logger.error("Some verifications failed")
+                logger.error(f"Some verifications failed ({passed_assertions}/{total_assertions})")
                 
             return {
                 'success': all(result.get('success', True) for result in validation_results),
                 'results': results,
-                'validation_results': validation_results
+                'validation_results': validation_results,
+                'total_assertions': total_assertions,
+                'passed_assertions': passed_assertions
             }
             
         except Exception as e:

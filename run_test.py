@@ -148,7 +148,7 @@ async def main():
         java_script_enabled=True,  # Ensure JavaScript is enabled
         offline=False,  # Ensure we're not in offline mode
         ignore_default_args=['--disable-extensions'],  # Don't disable extensions
-        viewport={'width': 1280, 'height': 720},  # Set a reasonable viewport size
+        
         user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'  # Set a modern user agent
     )
     browser_session = BrowserSession(browser_profile=browser_profile)
@@ -173,13 +173,19 @@ async def main():
             settings={
                 "task": """
                    
-  @agent=keep this in mind that you are testing a website so, follow the instructions carefully do not go beyond the instructions
-                step 1. Navigate to https://www.amazon.in/
-                step 2. click on hamberger menu with the text 'All'
-                step 3. assert that the text 'Digital Content and Devices' is present at xpath "//*[@id="hmenu-content"]/div[1]/section[2]/div".
-                step 4. click on sub nav with the text 'Amazon Prime Music'
-                step 5. Assert that the text 'Amazon Prime Music' in sub nav
-                step 6. and select the option with text 'Amazon Prime Music' 
+                @agent=keep this in mind that you are testing a website so, follow the instructions carefully do not go beyond the instructions
+                step 1. Navigate to https://foxtale.in/
+                step 2. assert that the  What does your skin need help with?
+                step 3. click on the option with the text 'Acne'
+                step 4. assert that the text 'Filters' is present.
+                step 4. click on the option with the text 'skin type'
+                step 5. assert that the text 'skin type' is present
+                step 6. under the text skin type assert thst the text 'oily' is present
+                step 7. click the option with the text 'oily'
+                step 8. now  select the checkbox
+                step 9. assert thst the text '0.15% Retinol Night Serum' is present
+                step 10. now select 0.15% Retinol Night Serum
+                step 11. now click on the text 'Add to cart'
                     
                 """,
                 "assertion_mode": "soft"  # Use soft assertions to continue on failure
