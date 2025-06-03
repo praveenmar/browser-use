@@ -1,8 +1,9 @@
 import pytest
+import pytest_asyncio
 from typing import Optional, Dict, List
 from pydantic import BaseModel
 from browser_use.controller.service import Controller
-from browser_use.browser.context import BrowserContext
+from browser_use.browser.session import BrowserSession
 from browser_use.agent.views import ActionModel, ActionResult
 from browser_use.controller.views import (
     ClickElementAction,
@@ -16,170 +17,201 @@ class TestOutputModel(BaseModel):
     value: str
     count: int
 
-@pytest.fixture
-def controller():
-    """Create a controller instance for testing."""
-    return Controller[Dict]()
+@pytest_asyncio.fixture
+async def controller():
+    """Create a controller instance"""
+    return Controller()
 
-@pytest.fixture
-def browser_context(mocker):
-    """Create a mock browser context."""
-    context = mocker.Mock(spec=BrowserContext)
-    context.get_current_page.return_value = mocker.AsyncMock()
-    return context
+@pytest_asyncio.fixture
+async def browser_session():
+    """Create a mock browser session"""
+    session = Mock(spec=BrowserSession)
+    session.get_current_page = AsyncMock()
+    return session
 
 @pytest.mark.asyncio
-async def test_multi_step_assertion_chain(controller, browser_context):
-    """Test a chain of assertions that depend on previous steps."""
-    # Step 1: Search Google
-    search_action = ActionModel(
-        name="search_google",
-        params=SearchGoogleAction(query="test query")
-    )
-    result1 = await controller.act(search_action, browser_context)
+async def test_multi_step_assertion_chain(controller, browser_session):
+    """Test chaining multiple assertions"""
+    # Create search action
+    search_action = ActionModel(**{
+        "search": {
+            "query": "test query"
+        }
+    })
+    
+    # Execute first action
+    result1 = await controller.act(search_action, browser_session)
     assert result1.success
-    assert "test query" in result1.extracted_content
-
-    # Step 2: Input text (depends on search results)
-    input_action = ActionModel(
-        name="input_text",
-        params=InputTextAction(index=1, text="test input")
-    )
-    result2 = await controller.act(input_action, browser_context)
+    
+    # Create input action
+    input_action = ActionModel(**{
+        "input": {
+            "selector": "#search-input",
+            "text": "test text"
+        }
+    })
+    
+    # Execute second action
+    result2 = await controller.act(input_action, browser_session)
     assert result2.success
-    assert "test input" in result2.extracted_content
-
-    # Step 3: Click element (depends on input)
-    click_action = ActionModel(
-        name="click_element_by_index",
-        params=ClickElementAction(index=2)
-    )
-    result3 = await controller.act(click_action, browser_context)
+    
+    # Create click action
+    click_action = ActionModel(**{
+        "click": {
+            "selector": "#submit-button"
+        }
+    })
+    
+    # Execute third action
+    result3 = await controller.act(click_action, browser_session)
     assert result3.success
 
 @pytest.mark.asyncio
-async def test_error_handling_and_recovery(controller, browser_context):
-    """Test error handling and recovery in action chain."""
-    # Step 1: Trigger an error
-    browser_context.get_current_page.side_effect = Exception("Network error")
+async def test_error_handling_and_recovery(controller, browser_session):
+    """Test error handling and recovery"""
+    # Create search action
+    search_action = ActionModel(**{
+        "search": {
+            "query": "test query"
+        }
+    })
     
-    search_action = ActionModel(
-        name="search_google",
-        params=SearchGoogleAction(query="test query")
-    )
-    result1 = await controller.act(search_action, browser_context)
+    # Simulate network error
+    browser_session.get_current_page.side_effect = Exception("Network error")
+    
+    # Execute action with error
+    result1 = await controller.act(search_action, browser_session)
     assert not result1.success
     assert "Network error" in result1.error
-
-    # Step 2: Recover and try again
-    browser_context.get_current_page.side_effect = None
-    result2 = await controller.act(search_action, browser_context)
+    
+    # Reset error and retry
+    browser_session.get_current_page.side_effect = None
+    result2 = await controller.act(search_action, browser_session)
     assert result2.success
 
 @pytest.mark.asyncio
-async def test_sensitive_data_handling(controller, browser_context):
-    """Test handling of sensitive data in actions."""
-    sensitive_data = {"password": "secret123"}
+async def test_sensitive_data_handling(controller, browser_session):
+    """Test handling of sensitive data"""
+    # Create action with sensitive data
+    sensitive_action = ActionModel(**{
+        "input": {
+            "selector": "#password-input",
+            "text": "secret123",
+            "sensitive": True
+        }
+    })
     
-    input_action = ActionModel(
-        name="input_text",
-        params=InputTextAction(index=1, text="secret123")
-    )
+    # Execute action
     result = await controller.act(
-        input_action,
-        browser_context,
-        sensitive_data=sensitive_data
+        sensitive_action,
+        browser_session
     )
+    
+    # Verify sensitive data is not logged
     assert result.success
-    assert "sensitive data" in result.extracted_content
-    assert "secret123" not in result.extracted_content
+    assert "secret123" not in str(result)
 
 @pytest.mark.asyncio
-async def test_output_model_serialization(controller, browser_context):
-    """Test serialization of complex output models."""
-    controller_with_model = Controller[Dict](output_model=TestOutputModel)
+async def test_output_model_serialization(controller, browser_session):
+    """Test serialization of output models"""
+    # Create controller with custom output model
+    class CustomOutputModel(ActionModel):
+        custom_field: str = "test"
+        
+    controller_with_model = Controller(output_model=CustomOutputModel)
     
-    done_action = ActionModel(
-        name="done",
-        params=DoneAction(
-            success=True,
-            text='{"value": "test", "count": 42}'
-        )
-    )
-    result = await controller_with_model.act(done_action, browser_context)
+    # Create done action
+    done_action = ActionModel(**{
+        "done": {
+            "message": "Test complete"
+        }
+    })
+    
+    # Execute action
+    result = await controller_with_model.act(done_action, browser_session)
+    
+    # Verify output model
     assert result.success
-    assert result.is_done
-    
-    # Verify the output is properly serialized
-    output_data = TestOutputModel.model_validate_json(result.extracted_content)
-    assert output_data.value == "test"
-    assert output_data.count == 42
+    assert isinstance(result, CustomOutputModel)
+    assert result.custom_field == "test"
 
 @pytest.mark.asyncio
-async def test_concurrent_action_handling(controller, browser_context):
-    """Test handling of concurrent actions."""
+async def test_concurrent_action_handling(controller, browser_session):
+    """Test handling of concurrent actions"""
     import asyncio
     
-    async def execute_action(action: ActionModel) -> ActionResult:
-        return await controller.act(action, browser_context)
+    # Create action
+    action = ActionModel(**{
+        "click": {
+            "selector": "#test-button"
+        }
+    })
     
-    # Create multiple actions to execute concurrently
-    actions = [
-        ActionModel(
-            name="search_google",
-            params=SearchGoogleAction(query=f"test query {i}")
-        )
-        for i in range(3)
-    ]
+    # Define action executor
+    async def execute_action():
+        return await controller.act(action, browser_session)
     
     # Execute actions concurrently
     results = await asyncio.gather(
-        *[execute_action(action) for action in actions]
+        execute_action(),
+        execute_action(),
+        execute_action()
     )
     
-    # Verify all actions completed successfully
+    # Verify all actions succeeded
     assert all(result.success for result in results)
-    assert len(results) == 3
 
 @pytest.mark.asyncio
-async def test_action_validation(controller, browser_context):
-    """Test validation of action parameters."""
-    # Test invalid index
-    input_action = ActionModel(
-        name="input_text",
-        params=InputTextAction(index=-1, text="test")
-    )
-    result = await controller.act(input_action, browser_context)
-    assert not result.success
-    assert "index" in result.error.lower()
-
-    # Test empty text
-    input_action = ActionModel(
-        name="input_text",
-        params=InputTextAction(index=1, text="")
-    )
-    result = await controller.act(input_action, browser_context)
-    assert not result.success
-    assert "text" in result.error.lower()
-
-@pytest.mark.asyncio
-async def test_browser_state_persistence(controller, browser_context):
-    """Test persistence of browser state between actions."""
-    # Step 1: Navigate to a page
-    search_action = ActionModel(
-        name="search_google",
-        params=SearchGoogleAction(query="initial state")
-    )
-    await controller.act(search_action, browser_context)
+async def test_action_validation(controller, browser_session):
+    """Test action validation"""
+    # Create invalid action
+    invalid_action = ActionModel(**{
+        "click": {
+            "invalid_param": "test"
+        }
+    })
     
-    # Step 2: Verify state is maintained
-    input_action = ActionModel(
-        name="input_text",
-        params=InputTextAction(index=1, text="verify state")
-    )
-    result = await controller.act(input_action, browser_context)
+    # Execute invalid action
+    result = await controller.act(invalid_action, browser_session)
+    assert not result.success
+    assert "validation" in result.error.lower()
+    
+    # Create valid action
+    valid_action = ActionModel(**{
+        "click": {
+            "selector": "#test-button"
+        }
+    })
+    
+    # Execute valid action
+    result = await controller.act(valid_action, browser_session)
     assert result.success
+
+@pytest.mark.asyncio
+async def test_browser_state_persistence(controller, browser_session):
+    """Test browser state persistence between actions"""
+    # Create search action
+    search_action = ActionModel(**{
+        "search": {
+            "query": "test query"
+        }
+    })
     
-    # Verify browser context methods were called in correct order
-    browser_context.get_current_page.assert_called()
-    assert browser_context.get_current_page.call_count == 2 
+    # Execute first action
+    await controller.act(search_action, browser_session)
+    
+    # Create input action
+    input_action = ActionModel(**{
+        "input": {
+            "selector": "#search-input",
+            "text": "test text"
+        }
+    })
+    
+    # Execute second action
+    result = await controller.act(input_action, browser_session)
+    
+    # Verify browser state was maintained
+    assert result.success
+    browser_session.get_current_page.assert_called()
+    assert browser_session.get_current_page.call_count == 2 

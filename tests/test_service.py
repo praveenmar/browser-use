@@ -13,6 +13,8 @@ from browser_use.browser.views import BrowserStateSummary
 from browser_use.controller.registry.service import Registry
 from browser_use.controller.registry.views import ActionModel
 from browser_use.controller.service import Controller
+from browser_use.browser.session import BrowserSession
+from browser_use.llm.service import LLMService
 
 # run with python -m pytest tests/test_service.py
 
@@ -342,3 +344,154 @@ class TestAgentRetry:
 		# Check that _last_result contains the noop action
 		assert len(agent._last_result) == 1
 		assert agent._last_result[0].action == mock_action_instance
+
+
+class TestAgentService:
+	"""Test agent service functionality"""
+	
+	@pytest_asyncio.fixture
+	async def mock_llm(self):
+		"""Create a mock LLM service"""
+		llm = Mock(spec=LLMService)
+		llm.generate = AsyncMock(return_value="Mock response")
+		return llm
+		
+	@pytest_asyncio.fixture
+	async def mock_controller(self):
+		"""Create a mock controller"""
+		controller = Mock(spec=Controller)
+		controller.act = AsyncMock(return_value=ActionResult(success=True))
+		return controller
+		
+	@pytest_asyncio.fixture
+	async def mock_browser(self):
+		"""Create a mock browser"""
+		browser = Mock()
+		browser.launch = AsyncMock()
+		browser.close = AsyncMock()
+		return browser
+		
+	@pytest_asyncio.fixture
+	async def mock_browser_session(self):
+		"""Create a mock browser session"""
+		session = Mock(spec=BrowserSession)
+		session.start = AsyncMock()
+		session.stop = AsyncMock()
+		session.get_current_page = AsyncMock()
+		session.get_state_summary = AsyncMock(return_value="Mock state")
+		return session
+		
+	@pytest.mark.asyncio
+	async def test_convert_initial_actions(self, mock_controller, mock_llm, mock_browser, mock_browser_session):
+		"""Test converting initial actions"""
+		# Create agent with mocks
+		agent = Agent(
+			task='Test task',
+			llm=mock_llm,
+			controller=mock_controller,
+			browser=mock_browser,
+			browser_session=mock_browser_session
+		)
+		
+		# Test action conversion
+		action = ActionModel(**{
+			"click": {
+				"selector": "#test-button"
+			}
+		})
+		
+		result = await agent.act(action)
+		assert result.success
+		
+	@pytest.mark.asyncio
+	async def test_execute_action_with_browser_session(self, mock_controller, mock_llm, mock_browser_session):
+		"""Test executing action with browser session"""
+		# Create agent
+		agent = Agent(
+			task='Test task',
+			llm=mock_llm,
+			controller=mock_controller,
+			browser_session=mock_browser_session
+		)
+		
+		# Create action
+		action = ActionModel(**{
+			"click": {
+				"selector": "#test-button"
+			}
+		})
+		
+		# Execute action
+		result = await agent.act(action)
+		
+		# Verify
+		assert result.success
+		mock_controller.act.assert_called_once()
+		mock_browser_session.get_current_page.assert_called()
+		
+	@pytest.mark.asyncio
+	async def test_execute_action_without_browser_session(self, mock_controller, mock_llm):
+		"""Test executing action without browser session"""
+		# Create agent without browser session
+		agent = Agent(
+			task='Test task',
+			llm=mock_llm,
+			controller=mock_controller
+		)
+		
+		# Create action
+		action = ActionModel(**{
+			"click": {
+				"selector": "#test-button"
+			}
+		})
+		
+		# Execute action
+		result = await agent.act(action)
+		
+		# Verify
+		assert result.success
+		mock_controller.act.assert_called_once()
+		
+	@pytest.mark.asyncio
+	async def test_step_empty_action_retry(self, mock_llm, mock_controller, mock_browser_session, mock_action_model):
+		"""Test retrying empty action"""
+		# Create agent
+		agent = Agent(
+			task='Test task',
+			llm=mock_llm,
+			controller=mock_controller,
+			browser_session=mock_browser_session
+		)
+		
+		# Mock empty action
+		mock_action_model.action = {}
+		
+		# Execute action
+		result = await agent.act(mock_action_model)
+		
+		# Verify retry
+		assert result.success
+		assert mock_controller.act.call_count > 1
+		
+	@pytest.mark.asyncio
+	async def test_step_empty_action_retry_and_fail(self, mock_llm, mock_controller, mock_browser_session, mock_action_model):
+		"""Test retrying empty action until failure"""
+		# Create agent
+		agent = Agent(
+			task='Test task',
+			llm=mock_llm,
+			controller=mock_controller,
+			browser_session=mock_browser_session
+		)
+		
+		# Mock empty action and controller failure
+		mock_action_model.action = {}
+		mock_controller.act.side_effect = Exception("Action failed")
+		
+		# Execute action
+		result = await agent.act(mock_action_model)
+		
+		# Verify failure
+		assert not result.success
+		assert "Action failed" in result.error

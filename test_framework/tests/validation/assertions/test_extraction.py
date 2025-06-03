@@ -85,10 +85,70 @@ def test_extract_text_from_content(extraction_assertions):
     
     # Test dictionary with no text keys
     content = {"other": "Hello World"}
-    assert extraction_assertions._extract_text_from_content(content) == "{'other': 'Hello World'}"
+    assert extraction_assertions._extract_text_from_content(content) == "Hello World"
     
     # Test non-string, non-dict content
     assert extraction_assertions._extract_text_from_content(123) == "123"
+    
+    # Test nested dictionary
+    content = {
+        "header": {
+            "title": "Main Title",
+            "subtitle": "Sub Title"
+        },
+        "body": {
+            "text": "Main content",
+            "footer": "Footer text"
+        }
+    }
+    assert extraction_assertions._extract_text_from_content(content) == "Main Title Sub Title Main content Footer text"
+    
+    # Test nested list
+    content = [
+        "First item",
+        ["Nested item 1", "Nested item 2"],
+        "Last item"
+    ]
+    assert extraction_assertions._extract_text_from_content(content) == "First item Nested item 1 Nested item 2 Last item"
+    
+    # Test complex nested structure
+    content = {
+        "menu": {
+            "items": [
+                {"name": "Home", "url": "/home"},
+                {"name": "About", "url": "/about"}
+            ],
+            "title": "Main Menu"
+        },
+        "content": {
+            "text": "Welcome",
+            "sections": [
+                {"heading": "Section 1", "text": "Content 1"},
+                {"heading": "Section 2", "text": "Content 2"}
+            ]
+        }
+    }
+    expected = "Home /home About /about Main Menu Welcome Section 1 Content 1 Section 2 Content 2"
+    assert extraction_assertions._extract_text_from_content(content) == expected
+    
+    # Test with None values
+    content = {
+        "text": "Hello",
+        "empty": None,
+        "nested": {
+            "value": None,
+            "text": "World"
+        }
+    }
+    assert extraction_assertions._extract_text_from_content(content) == "Hello World"
+    
+    # Test with empty structures
+    content = {
+        "empty_dict": {},
+        "empty_list": [],
+        "text": "Hello"
+    }
+    assert extraction_assertions._extract_text_from_content(content) == "Hello"
 
 def test_process_pending_extractions(extraction_assertions, mock_result):
     """Test processing of pending extractions."""
@@ -182,3 +242,88 @@ def test_process_extraction_result(extraction_assertions):
     result = extraction_assertions._process_extraction_result(content)
     assert isinstance(result, ActionResult)
     assert result.extracted_content == content 
+
+@pytest.mark.asyncio
+async def test_get_last_extraction_result_with_xpath(extraction_assertions, mock_result):
+    """Test getting extraction result with XPath targeting."""
+    # Setup mock result with extractions containing elements
+    mock_action = MagicMock()
+    mock_action.extract_content = {
+        "elements": [
+            {
+                "xpath": "//div[@class='header']",
+                "text": "Header Text"
+            },
+            {
+                "xpath": "//div[@class='content']",
+                "text": "Content Text"
+            }
+        ]
+    }
+    mock_result.append(mock_action)
+    
+    # Test finding element with matching XPath
+    result = await extraction_assertions._get_last_extraction_result(
+        requirement='verify text "Content Text"',
+        current_step=0,
+        xpath="//div[@class='content']"
+    )
+    assert result is not None
+    assert result.extracted_content == "Content Text"
+    
+    # Test with non-matching XPath
+    result = await extraction_assertions._get_last_extraction_result(
+        requirement='verify text "Content Text"',
+        current_step=0,
+        xpath="//div[@class='footer']"
+    )
+    assert result is None
+    
+    # Test with XPath but no elements in content
+    mock_action.extract_content = {"text": "Some Text"}
+    result = await extraction_assertions._get_last_extraction_result(
+        requirement='verify text "Some Text"',
+        current_step=0,
+        xpath="//div[@class='content']"
+    )
+    assert result is not None
+    assert result.extracted_content == "Some Text"
+    
+    # Test with XPath and element containing value instead of text
+    mock_action.extract_content = {
+        "elements": [
+            {
+                "xpath": "//input[@type='text']",
+                "value": "Input Value"
+            }
+        ]
+    }
+    result = await extraction_assertions._get_last_extraction_result(
+        requirement='verify text "Input Value"',
+        current_step=0,
+        xpath="//input[@type='text']"
+    )
+    assert result is not None
+    assert result.extracted_content == "Input Value"
+    
+    # Test with XPath and nested elements
+    mock_action.extract_content = {
+        "elements": [
+            {
+                "xpath": "//div[@class='container']",
+                "elements": [
+                    {
+                        "xpath": "//div[@class='container']//span",
+                        "text": "Nested Text"
+                    }
+                ]
+            }
+        ]
+    }
+    result = await extraction_assertions._get_last_extraction_result(
+        requirement='verify text "Nested Text"',
+        current_step=0,
+        xpath="//div[@class='container']//span"
+    )
+    assert result is not None
+    assert result.extracted_content == "Nested Text" 

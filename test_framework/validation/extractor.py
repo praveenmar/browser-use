@@ -9,6 +9,7 @@ from typing import Optional, Dict, Any
 from browser_use import Page
 from browser_use.dom.service import DomService
 from browser_use.browser.context import BrowserContext
+from browser_use.browser.session import BrowserSession
 import json
 
 logger = logging.getLogger("test_framework.validation.extractor")
@@ -49,15 +50,15 @@ class ExtractedAttributeResult:
 class BrowserExtractor:
     """Handles all browser interactions for data extraction without validation"""
     
-    def __init__(self, browser_context: BrowserContext, agent):
-        self.browser_context = browser_context
+    def __init__(self, browser_session: BrowserSession, agent):
+        self.browser_session = browser_session
         self.agent = agent
         self.page: Optional[Page] = None
 
     async def ensure_page(self) -> Page:
         """Ensure we have a valid page object"""
         if not self.page:
-            self.page = await self.browser_context.get_current_page()
+            self.page = await self.browser_session.get_current_page()
         return self.page
 
     def _parse_content(self, content: Any) -> Dict[str, Any]:
