@@ -7,6 +7,7 @@ import logging
 import json
 from typing import Dict, Any
 from browser_use.browser.context import BrowserContext
+from browser_use.browser.session import BrowserSession
 from browser_use.controller.service import Controller
 from browser_use.agent.views import ActionResult
 
@@ -26,10 +27,10 @@ class TestController(Controller):
             'Extract text content from an element using a selector',
             param_model=Dict[str, Any]
         )
-        async def extract_text(params: Dict[str, Any], browser: BrowserContext) -> ActionResult:
-            """Extract text from an element using a selector"""
+        async def extract_text(params: Dict[str, Any], browser_session: BrowserSession) -> ActionResult:
+            """Extract text content from an element using a selector"""
             try:
-                page = await browser.get_current_page()
+                page = await browser_session.get_current_page()
                 locator = page.locator(params['selector'])
                 
                 is_visible = await locator.is_visible(timeout=params.get('timeout', 5000))
@@ -63,10 +64,10 @@ class TestController(Controller):
             'Extract link information from an element using a selector',
             param_model=Dict[str, Any]
         )
-        async def extract_link(params: Dict[str, Any], browser: BrowserContext) -> ActionResult:
+        async def extract_link(params: Dict[str, Any], browser_session: BrowserSession) -> ActionResult:
             """Extract link information from an element using a selector"""
             try:
-                page = await browser.get_current_page()
+                page = await browser_session.get_current_page()
                 locator = page.locator(params['selector'])
                 
                 is_visible = await locator.is_visible(timeout=params.get('timeout', 5000))
@@ -103,10 +104,10 @@ class TestController(Controller):
             'Extract attribute value from an element using a selector',
             param_model=Dict[str, Any]
         )
-        async def extract_attribute(params: Dict[str, Any], browser: BrowserContext) -> ActionResult:
+        async def extract_attribute(params: Dict[str, Any], browser_session: BrowserSession) -> ActionResult:
             """Extract attribute from an element using a selector"""
             try:
-                page = await browser.get_current_page()
+                page = await browser_session.get_current_page()
                 locator = page.locator(params['selector'])
                 
                 is_visible = await locator.is_visible(timeout=params.get('timeout', 5000))

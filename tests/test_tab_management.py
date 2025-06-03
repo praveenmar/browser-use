@@ -4,6 +4,7 @@ import logging
 import pytest
 from dotenv import load_dotenv
 from pytest_httpserver import HTTPServer
+import pytest_asyncio
 
 load_dotenv()
 
@@ -56,7 +57,7 @@ class TestTabManagement:
 		profile = BrowserProfile(headless=True)
 		yield profile
 
-	@pytest.fixture(scope='module')
+	@pytest_asyncio.fixture
 	async def browser_session(self, browser_profile, http_server):
 		"""Create and provide a BrowserSession instance with a properly initialized tab."""
 		browser_session = BrowserSession(
@@ -313,3 +314,80 @@ class TestTabManagement:
 		# close_tab should have called get_current_page, which creates a new about:blank tab if none are left
 		assert browser_session.human_current_page.url == 'about:blank'
 		assert browser_session.agent_current_page.url == 'about:blank'
+
+	@pytest.mark.asyncio
+	async def test_tab_creation(self, browser_session):
+		"""Test creating new tabs"""
+		# Get initial tab count
+		initial_tab_count = len(await browser_session.get_pages())
+		
+		# Create a new tab
+		new_page = await browser_session.new_page()
+		assert new_page is not None
+		
+		# Verify tab count increased
+		new_tab_count = len(await browser_session.get_pages())
+		assert new_tab_count == initial_tab_count + 1
+		
+		# Verify new tab is accessible
+		current_page = await browser_session.get_current_page()
+		assert current_page == new_page
+
+	@pytest.mark.asyncio
+	async def test_tab_switching(self, browser_session):
+		"""Test switching between tabs"""
+		# Create multiple tabs
+		page1 = await browser_session.get_current_page()
+		page2 = await browser_session.new_page()
+		page3 = await browser_session.new_page()
+		
+		# Navigate each tab to different URLs
+		await page1.goto("https://example.com")
+		await page2.goto("https://example.org")
+		await page3.goto("https://example.net")
+		
+		# Switch between tabs and verify URLs
+		await browser_session.switch_to_page(page1)
+		assert (await browser_session.get_current_page()).url == "https://example.com"
+		
+		await browser_session.switch_to_page(page2)
+		assert (await browser_session.get_current_page()).url == "https://example.org"
+		
+		await browser_session.switch_to_page(page3)
+		assert (await browser_session.get_current_page()).url == "https://example.net"
+
+	@pytest.mark.asyncio
+	async def test_tab_closing(self, browser_session):
+		"""Test closing tabs"""
+		# Create multiple tabs
+		page1 = await browser_session.get_current_page()
+		page2 = await browser_session.new_page()
+		page3 = await browser_session.new_page()
+		
+		# Get initial tab count
+		initial_tab_count = len(await browser_session.get_pages())
+		
+		# Close a tab
+		await browser_session.close_page(page2)
+		
+		# Verify tab count decreased
+		new_tab_count = len(await browser_session.get_pages())
+		assert new_tab_count == initial_tab_count - 1
+		
+		# Verify closed tab is not accessible
+		pages = await browser_session.get_pages()
+		assert page2 not in pages
+
+	@pytest.mark.asyncio
+	async def test_human_tab_creation(self, browser_session):
+		"""Test creating a human-visible tab"""
+		# Create a new human-visible tab
+		new_human_tab = await browser_session.new_page(headless=False)
+		assert new_human_tab is not None
+		
+		# Verify tab is accessible
+		current_page = await browser_session.get_current_page()
+		assert current_page == new_human_tab
+		
+		# Verify tab is not headless
+		assert not new_human_tab.is_headless()
