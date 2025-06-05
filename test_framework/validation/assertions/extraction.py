@@ -42,6 +42,7 @@ class ExtractionAssertions(BaseAssertions):
         self._page_state = {}  # Track page state
         self._validation_context = {}  # Track validation context
         self._step_types = {}  # Track step types
+        self._case_sensitive = True  # Default to case-sensitive
         
         # Initialize browser session
         if hasattr(agent, 'browser_session'):
@@ -806,11 +807,16 @@ class ExtractionAssertions(BaseAssertions):
             float: Similarity score between 0 and 1
         """
         # Normalize input texts
-        text1 = ' '.join(text1.lower().split())
-        
+        if not self._case_sensitive:
+            text1 = ' '.join(text1.lower().split())
+        else:
+            text1 = ' '.join(text1.split())
+            
         def normalize_text(text: str) -> str:
-            """Normalize text by removing extra whitespace and converting to lowercase."""
-            return ' '.join(text.lower().split())
+            """Normalize text by removing extra whitespace and respecting case sensitivity."""
+            if not self._case_sensitive:
+                return ' '.join(text.lower().split())
+            return ' '.join(text.split())
             
         def check_dict_match(d: dict, search_text: str) -> float:
             """Recursively check dictionary for matches."""
@@ -875,4 +881,12 @@ class ExtractionAssertions(BaseAssertions):
             return 1.0
             
         # If no match found, return 0
-        return 0.0 
+        return 0.0
+
+    def set_case_sensitive(self, case_sensitive: bool = True):
+        """Set whether text matching should be case-sensitive.
+        
+        Args:
+            case_sensitive: Whether to use case-sensitive matching (default: True)
+        """
+        self._case_sensitive = case_sensitive 

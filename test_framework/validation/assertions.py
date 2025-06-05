@@ -86,6 +86,16 @@ class TestAssertions:
         self.verification_assertions = VerificationAssertions(agent, result)
         self.step_tracking_assertions = StepTrackingAssertions(agent, result)
             
+        self._case_sensitive = True  # Default to case-sensitive
+            
+    def set_case_sensitive(self, case_sensitive: bool = True):
+        """Set whether text matching should be case-sensitive.
+        
+        Args:
+            case_sensitive: Whether to use case-sensitive matching (default: True)
+        """
+        self._case_sensitive = case_sensitive
+            
     def _calculate_context_window(self) -> int:
         """Calculate appropriate context window based on task characteristics.
         
@@ -163,9 +173,13 @@ class TestAssertions:
         Returns:
             float: Similarity score between 0 and 1
         """
-        # Normalize texts
-        text1 = ' '.join(text1.lower().split())
-        text2 = ' '.join(text2.lower().split())
+        # Normalize texts based on case sensitivity setting
+        if not self._case_sensitive:
+            text1 = ' '.join(text1.lower().split())
+            text2 = ' '.join(text2.lower().split())
+        else:
+            text1 = ' '.join(text1.split())
+            text2 = ' '.join(text2.split())
         
         # Calculate string similarity
         string_sim = SequenceMatcher(None, text1, text2).ratio()
@@ -199,9 +213,13 @@ class TestAssertions:
         Returns:
             Tuple[bool, float, str]: (is_match, similarity_score, match_type)
         """
-        # Normalize texts
-        goal_norm = ' '.join(goal.lower().split())
-        expected_norm = ' '.join(expected_text.lower().split())
+        # Normalize texts based on case sensitivity setting
+        if not self._case_sensitive:
+            goal_norm = ' '.join(goal.lower().split())
+            expected_norm = ' '.join(expected_text.lower().split())
+        else:
+            goal_norm = ' '.join(goal.split())
+            expected_norm = ' '.join(expected_text.split())
         
         # Check for exact goal match
         if f"extract the text '{expected_text}'" in goal_norm or \
@@ -440,9 +458,13 @@ class TestAssertions:
         if not content or not expected_text:
             return 0.0
             
-        # Normalize texts
-        content_norm = ' '.join(content.lower().split())
-        expected_norm = ' '.join(expected_text.lower().split())
+        # Normalize texts based on case sensitivity setting
+        if not self._case_sensitive:
+            content_norm = ' '.join(content.lower().split())
+            expected_norm = ' '.join(expected_text.lower().split())
+        else:
+            content_norm = ' '.join(content.split())
+            expected_norm = ' '.join(expected_text.split())
         
         # Get term positions
         content_terms = content_norm.split()
@@ -1169,9 +1191,15 @@ class TestAssertions:
                 logger.debug("Using raw content")
                 metadata["actual_text"] = content_info["value"]
             
-            # Verify the text
+            # Verify the text with case sensitivity setting
             logger.debug(f"Verifying text with metadata: {metadata}")
-            return self.verify_text(last_extraction, expected_text, exact=False, metadata=metadata)
+            return self.verify_text(
+                last_extraction, 
+                expected_text, 
+                exact=False, 
+                case_sensitive=self._case_sensitive, 
+                metadata=metadata
+            )
             
         elif "verify link" in requirement.lower():
             logger.debug("Processing link verification")
@@ -1221,7 +1249,7 @@ class TestAssertions:
                 metadata["actual_text"] = content_info["value"]
                 metadata["actual_href"] = None
             
-            return self.verify_link(last_extraction, expected_text, expected_href, metadata=metadata)
+            return self.verify_link(last_extraction, expected_text, expected_href, exact=False, is_relative=False, base_url=None, metadata=metadata)
             
         elif "verify attribute" in requirement.lower():
             logger.debug("Processing attribute verification")
@@ -1264,7 +1292,7 @@ class TestAssertions:
                 logger.debug("Using raw content")
                 metadata["actual_value"] = content_info["value"]
             
-            return self.verify_attribute(last_extraction, expected_value, metadata=metadata)
+            return self.verify_attribute(last_extraction, expected_value, relaxed=False, metadata=metadata)
             
         logger.error(f"Unknown requirement type: {requirement}")
         return AssertionResult(
@@ -1279,10 +1307,11 @@ class TestAssertions:
         action_result: ActionResult,
         expected_text: str,
         exact: bool = True,
+        case_sensitive: bool = True,
         metadata: Optional[Dict[str, Any]] = None
     ) -> AssertionResult:
-        """Verify text content"""
-        logger.debug(f"Verifying text: expected='{expected_text}', exact={exact}")
+        """Verify text content with configurable case sensitivity."""
+        logger.debug(f"Verifying text: expected='{expected_text}', exact={exact}, case_sensitive={case_sensitive}")
         
         if not action_result.success:
             logger.error(f"Text verification failed: {action_result.error}")
@@ -1318,13 +1347,14 @@ class TestAssertions:
                 metadata=metadata
             )
             
-        # Use the validator to check the text
+        # Use the validator to check the text with configurable case sensitivity
         mode = ValidationMode.EXACT if exact else ValidationMode.CONTAINS
-        logger.debug(f"Validating text with mode: {mode}")
+        logger.debug(f"Validating text with mode: {mode}, case_sensitive: {case_sensitive}")
         result = TestValidator.validate_text(
             expected=expected_text,
             actual=actual_text,
             mode=mode,
+            case_sensitive=case_sensitive,
             original_requirement=metadata.get("requirement", "") if metadata else ""
         )
         
@@ -1340,6 +1370,7 @@ class TestAssertions:
             "expected_text": expected_text,
             "actual_text": actual_text,
             "validation_mode": mode.value,
+            "case_sensitive": case_sensitive,
             "validation_result": {
                 "success": result.success,
                 "error_code": result.error_code,

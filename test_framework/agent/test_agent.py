@@ -64,6 +64,10 @@ class TestAgent:
         self.verification_assertions = VerificationAssertions(self.agent, empty_history)
         self.extraction_assertions = ExtractionAssertions(self.agent, empty_history)
         self.matching_assertions = MatchingAssertions(self.agent, empty_history)
+        # Ensure all assertions are case-sensitive by default
+        self.verification_assertions.set_case_sensitive(True)
+        self.extraction_assertions.set_case_sensitive(True)
+        self.matching_assertions.set_case_sensitive(True)
         
     async def start(self):
         """Start the test agent."""
@@ -123,7 +127,7 @@ class TestAgent:
                 await self.agent.step(step_info)
                 
                 # Check if this step requires validation
-                if 'assert' in step.lower():
+                if 'assert' in step.lower() or 'verify' in step.lower():
                     # Wait for DOM stability before validation
                     await self.wait_for_dom_stability()
                     
@@ -135,31 +139,41 @@ class TestAgent:
                     verification_success = True
                     last_error = None
                     
-                    # Extract expected text from assertion
+                    # Extract expected text from assertion/verification
                     expected_text = None
                     
-                    # Try different patterns for assertion text
+                    # Try different patterns for assertion/verification text
                     patterns = [
+                        # Assert patterns
                         r"assert that the text '([^']*)'",  # Standard format
                         r"assert thst the text '([^']*)'",  # Common typo
                         r"assert that '([^']*)'",          # Short format
                         r"assert thst '([^']*)'",          # Short format with typo
                         r"under the text [^']* assert thst '([^']*)'",  # Under text format
                         r"assert that the ([^']*) is present",  # Is present format
-                        r"assert thst the ([^']*) is present"   # Is present format with typo
+                        r"assert thst the ([^']*) is present",   # Is present format with typo
+                        # Verify patterns
+                        r"verify that the text '([^']*)'",  # Standard format
+                        r"verify thst the text '([^']*)'",  # Common typo
+                        r"verify that '([^']*)'",          # Short format
+                        r"verify thst '([^']*)'",          # Short format with typo
+                        r"under the text [^']* verify thst '([^']*)'",  # Under text format
+                        r"verify that the ([^']*) is present",  # Is present format
+                        r"verify thst the ([^']*) is present"   # Is present format with typo
                     ]
                     
                     for pattern in patterns:
-                        match = re.search(pattern, step.lower())
+                        match = re.search(pattern, step, re.IGNORECASE)
                         if match:
                             expected_text = match.group(1)
                             break
                             
                     if expected_text:
-                        # Verify the text
+                        # Verify the text with case sensitivity
                         verification_success, last_error = await self.verification_assertions.verify_text(
                             expected_text,
-                            step
+                            step,
+                            case_sensitive=True  # Explicitly set case sensitivity
                         )
                         
                         if verification_success:

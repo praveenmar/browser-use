@@ -14,19 +14,18 @@ from browser_use.agent.views import ActionResult, AgentHistoryList
 from browser_use.agent.service import Agent
 
 from .base import BaseAssertions, AssertionResult, ListAssertionResult
+from .text_validation import TextValidation  # Import from new module
 
 logger = logging.getLogger("test_framework.validation.assertions")
 
 # Constants for similarity thresholds
 FUZZY_MATCH_THRESHOLD = 0.85
-CASE_INSENSITIVE_THRESHOLD = 1.0
 EXACT_MATCH_THRESHOLD = 1.0
 
 class MatchType(Enum):
     """Types of text matches"""
     EXACT = auto()
     CONTAINS = auto()
-    CASE_INSENSITIVE = auto()
     FUZZY = auto()
     NO_MATCH = auto()
     
@@ -53,6 +52,7 @@ class MatchingAssertions(BaseAssertions):
         super().__init__(agent, result)
         self._similarity_threshold = 1.0  # Default to exact matching
         self._use_fuzzy_matching = False  # Default to strict matching
+        self._case_sensitive = True  # Default to case-sensitive matching
         
     def enable_fuzzy_matching(self, threshold: float = 0.8):
         """Enable fuzzy matching with specified threshold.
@@ -66,11 +66,34 @@ class MatchingAssertions(BaseAssertions):
         self._use_fuzzy_matching = True
         self._similarity_threshold = threshold
         
+    def set_case_sensitive(self, case_sensitive: bool = True):
+        """Set whether text matching should be case-sensitive.
+        
+        Args:
+            case_sensitive: Whether to use case-sensitive matching (default: True)
+        """
+        self._case_sensitive = case_sensitive
+        
     def _normalize_text(self, text: str) -> str:
-        """Normalize text for comparison."""
+        """Normalize text for comparison based on case sensitivity setting.
+        
+        Args:
+            text: Text to normalize
+            
+        Returns:
+            str: Normalized text
+        """
         if not text:
             return ""
-        return text.lower().strip()
+            
+        # Strip whitespace
+        text = text.strip()
+        
+        # Handle case sensitivity
+        if not self._case_sensitive:
+            text = text.lower()
+            
+        return text
         
     def _calculate_text_similarity(self, text1: str, text2: str) -> float:
         """Calculate similarity between two texts using SequenceMatcher."""
@@ -79,7 +102,7 @@ class MatchingAssertions(BaseAssertions):
         if not text1 or not text2:
             return 0.0
             
-        # Normalize texts
+        # Normalize texts based on case sensitivity setting
         text1 = self._normalize_text(text1)
         text2 = self._normalize_text(text2)
         
@@ -97,7 +120,7 @@ class MatchingAssertions(BaseAssertions):
         Returns:
             MatchResult: Result of the matching operation with type, success, score and snippet
         """
-        logger.debug(f"Starting text matching: expected='{expected}', actual='{actual}'")
+        logger.debug(f"Starting text matching: expected='{expected}', actual='{actual}', case_sensitive={self._case_sensitive}")
         
         # Initialize result
         result: MatchResult = {
@@ -107,58 +130,33 @@ class MatchingAssertions(BaseAssertions):
             "matched_snippet": actual
         }
         
+        # Normalize texts based on case sensitivity setting
+        expected_norm = self._normalize_text(expected)
+        actual_norm = self._normalize_text(actual)
+        
         # 1. Try exact match
-        logger.debug(f"Attempting exact match: '{expected}' == '{actual}'")
-        if expected == actual:
-            logger.info(f"Exact match found: '{expected}'")
-            result.update({
-                "match_type": MatchType.EXACT,
-                "success": True,
-                "similarity_score": EXACT_MATCH_THRESHOLD
-            })
+        if expected_norm == actual_norm:
+            result["match_type"] = MatchType.EXACT
+            result["success"] = True
+            result["similarity_score"] = 1.0
             return result
             
         # 2. Try contains match
-        logger.debug(f"Attempting contains match: '{expected}' in '{actual}'")
-        if expected in actual:
-            logger.info(f"Contains match found: '{expected}' in '{actual}'")
-            result.update({
-                "match_type": MatchType.CONTAINS,
-                "success": True,
-                "similarity_score": 1.0
-            })
+        if expected_norm in actual_norm:
+            result["match_type"] = MatchType.CONTAINS
+            result["success"] = True
+            result["similarity_score"] = 1.0
             return result
             
-        # 3. Try case-insensitive match
-        logger.debug(f"Attempting case-insensitive match: '{expected.lower()}' == '{actual.lower()}'")
-        if expected.lower() == actual.lower():
-            logger.warning(f"Case-insensitive match found but exact match failed. Potential case mismatch: '{expected}' vs '{actual}'")
-            result.update({
-                "match_type": MatchType.CASE_INSENSITIVE,
-                "success": True,
-                "similarity_score": CASE_INSENSITIVE_THRESHOLD
-            })
-            return result
-            
-        # 4. Try fuzzy match if enabled
+        # 3. Try fuzzy matching if enabled
         if use_fuzzy_matching:
-            logger.debug(f"Attempting fuzzy match with threshold {FUZZY_MATCH_THRESHOLD}")
-            similarity = self._calculate_text_similarity(expected, actual)
-            logger.debug(f"Fuzzy match similarity score: {similarity:.2f}")
-            
+            similarity = self._calculate_text_similarity(expected_norm, actual_norm)
             if similarity >= FUZZY_MATCH_THRESHOLD:
-                logger.info(f"Fuzzy match successful with score {similarity:.2f}")
-                result.update({
-                    "match_type": MatchType.FUZZY,
-                    "success": True,
-                    "similarity_score": similarity
-                })
+                result["match_type"] = MatchType.FUZZY
+                result["success"] = True
+                result["similarity_score"] = similarity
                 return result
-            else:
-                logger.debug(f"Fuzzy match failed with score {similarity:.2f} (below threshold {FUZZY_MATCH_THRESHOLD})")
                 
-        # No match found
-        logger.warning(f"No match found for text: '{expected}'")
         return result
         
     def _find_best_match(self, text: str, candidates: List[str]) -> Tuple[Optional[str], float]:
@@ -209,31 +207,26 @@ class MatchingAssertions(BaseAssertions):
         logger.debug(f"Verifying text match with threshold {threshold}")
         logger.debug(f"Expected: '{expected}'")
         logger.debug(f"Actual: '{actual}'")
+        logger.debug(f"Case sensitive: {self._case_sensitive}")
         
-        # Get match result
-        match_result = self.match_text(expected, actual, self._use_fuzzy_matching)
+        # Create a mock action result with the actual text
+        mock_result = ActionResult(
+            success=True,
+            extracted_content=actual,
+            error=None
+        )
         
-        # Create metadata
-        metadata = {
-            "expected": expected,
-            "actual": actual,
-            "match_type": str(match_result["match_type"]),
-            "similarity": match_result["similarity_score"],
-            "threshold": threshold,
-            "normalized_expected": self._normalize_text(expected),
-            "normalized_actual": self._normalize_text(actual)
-        }
-        
-        if match_result["success"]:
-            logger.info(f"Text match successful: {match_result['match_type']} with similarity {match_result['similarity_score']:.2f}")
-        else:
-            logger.warning(f"Text match failed: {match_result['match_type']} with similarity {match_result['similarity_score']:.2f}")
-            
-        return AssertionResult(
-            success=match_result["success"],
-            error_code=None if match_result["success"] else "TEXT_MISMATCH",
-            message=f"Text match type: {match_result['match_type']}, similarity: {match_result['similarity_score']:.2f}",
-            metadata=metadata
+        # Use TextValidation to verify the text with our case sensitivity setting
+        return TextValidation.verify_text(
+            action_result=mock_result,
+            expected_text=expected,
+            exact=True,
+            case_sensitive=self._case_sensitive,
+            metadata={
+                "threshold": threshold,
+                "match_type": "exact",
+                "case_sensitive": self._case_sensitive
+            }
         )
         
     def _verify_list_match(self, expected_items: List[str], actual_items: List[str], 

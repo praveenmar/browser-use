@@ -1,15 +1,15 @@
 """
-Assertions package for test framework.
-Provides functionality for verifying test requirements and assertions.
+Test assertions package.
+Provides assertion functionality for test validation.
 """
 
-from .base import BaseAssertions, AssertionResult, AssertionType
+from .base import BaseAssertions, AssertionResult, ListAssertionResult
+from .text_validation import TextValidation
 from .extraction import ExtractionAssertions
 from .matching import MatchingAssertions
 from .verification import VerificationAssertions
 from .step_tracking import StepTrackingAssertions
 from .models import (
-    ListAssertionResult,
     ExtractionResult,
     StepContext,
     VerificationContext,
@@ -22,13 +22,13 @@ from .models import (
 
 __all__ = [
     'BaseAssertions',
+    'AssertionResult',
+    'ListAssertionResult',
+    'TextValidation',
     'ExtractionAssertions',
     'MatchingAssertions',
     'VerificationAssertions',
     'StepTrackingAssertions',
-    'AssertionResult',
-    'ListAssertionResult',
-    'AssertionType',
     'ExtractionResult',
     'StepContext',
     'VerificationContext',

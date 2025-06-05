@@ -326,4 +326,38 @@ async def test_get_last_extraction_result_with_xpath(extraction_assertions, mock
         xpath="//div[@class='container']//span"
     )
     assert result is not None
-    assert result.extracted_content == "Nested Text" 
+    assert result.extracted_content == "Nested Text"
+
+def test_json_case_insensitive(extraction_assertions):
+    """Test case-insensitive matching in JSON."""
+    extraction_assertions.set_case_sensitive(False)  # Enable case-insensitive matching
+    json_content = {"DIGITAL CONTENT AND DEVICES": "Some content"}
+    assert extraction_assertions._calculate_text_similarity("Digital Content and Devices", json_content) == 1.0
+
+def test_json_whitespace_handling(extraction_assertions):
+    """Test whitespace handling in JSON."""
+    json_content = {"  Digital Content and Devices  ": "Some content"}
+    assert extraction_assertions._calculate_text_similarity("Digital Content and Devices", json_content) == 1.0
+
+def test_no_match(extraction_assertions):
+    # Test no match cases
+    assert extraction_assertions._calculate_text_similarity("Hello", "World") == 0.0
+    assert extraction_assertions._calculate_text_similarity("Hello", {"key": "World"}) == 0.0
+
+def test_case_insensitive(extraction_assertions):
+    """Test case insensitivity."""
+    extraction_assertions.set_case_sensitive(False)  # Enable case-insensitive matching
+    assert extraction_assertions._calculate_text_similarity("HELLO", "hello") == 1.0
+    assert extraction_assertions._calculate_text_similarity("HELLO", {"HELLO": "world"}) == 1.0
+
+def test_case_sensitive(extraction_assertions):
+    """Test case sensitivity."""
+    extraction_assertions.set_case_sensitive(True)  # Enable case-sensitive matching
+    assert extraction_assertions._calculate_text_similarity("HELLO", "hello") == 0.0
+    assert extraction_assertions._calculate_text_similarity("HELLO", {"HELLO": "world"}) == 1.0
+    assert extraction_assertions._calculate_text_similarity("HELLO", {"hello": "world"}) == 0.0
+
+def test_whitespace_handling(extraction_assertions):
+    """Test whitespace handling."""
+    assert extraction_assertions._calculate_text_similarity("  Hello  ", "Hello") == 1.0
+    assert extraction_assertions._calculate_text_similarity("Hello", {"  Hello  ": "world"}) == 1.0 

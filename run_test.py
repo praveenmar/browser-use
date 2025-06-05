@@ -174,18 +174,9 @@ async def main():
                 "task": """
                    
                 @agent=keep this in mind that you are testing a website so, follow the instructions carefully do not go beyond the instructions
-                step 1. Navigate to https://foxtale.in/
-                step 2. assert that the text 'What does your skin need help with?' is present
-                step 3. click on the option with the text 'Acne'
-                step 4. assert that the text 'Filters' is present.
-                step 4. click on the option with the text 'skin type'
-                step 5. assert that the text 'skin type' is present
-                step 6. under the text skin type assert thst the text 'oily' is present
-                step 7. click the option with the text 'oily'
-                step 8. now  select the checkbox
-                step 9. assert that the text '0.15% Retinol Night Serum' is present
-                step 10. now select 0.15% Retinol Night Serum
-                step 11. now click on the text 'Add to cart'
+                step 1. Navigate to http://uitestingplayground.com/dynamicid
+                step 2. assert that the text 'Then execute your test to make sure that ID is not used for button identification.' is visible
+                step 3. Finally give me a report of the test like what passed and what failed.
                     
                 """,
                 "assertion_mode": "soft"  # Use soft assertions to continue on failure

@@ -23,8 +23,10 @@ def mock_result():
 
 @pytest.fixture
 def matching_assertions(mock_agent, mock_result):
-    """Create a MatchingAssertions instance for testing."""
-    return MatchingAssertions(mock_agent, mock_result)
+    """Create a MatchingAssertions instance for testing with case sensitivity set to True by default."""
+    ma = MatchingAssertions(mock_agent, mock_result)
+    ma.set_case_sensitive(True)
+    return ma
 
 def test_initialization(matching_assertions):
     """Test initialization of MatchingAssertions."""
@@ -65,6 +67,8 @@ def test_normalize_text(matching_assertions):
 
 def test_calculate_text_similarity_strict(matching_assertions):
     """Test text similarity calculation in strict mode."""
+    matching_assertions.set_case_sensitive(True)  # Enable case-sensitive matching
+    
     # Test exact matches
     assert matching_assertions._calculate_text_similarity("hello", "hello") == 1.0
     assert matching_assertions._calculate_text_similarity("Hello", "Hello") == 1.0
@@ -86,21 +90,22 @@ def test_calculate_text_similarity_strict(matching_assertions):
 def test_calculate_text_similarity_fuzzy(matching_assertions):
     """Test text similarity calculation in fuzzy mode."""
     matching_assertions.enable_fuzzy_matching(0.8)
+    matching_assertions.set_case_sensitive(False)  # Enable case-insensitive matching
     
     # Test exact matches
     assert matching_assertions._calculate_text_similarity("hello", "hello") == 1.0
     
     # Test case differences (should pass in fuzzy mode)
     similarity = matching_assertions._calculate_text_similarity("Hello", "hello")
-    assert similarity == 0.9  # Case difference gives 0.9 similarity
+    assert similarity == 1.0  # Case difference should match in case-insensitive mode
     
     # Test whitespace differences (should pass in fuzzy mode)
     similarity = matching_assertions._calculate_text_similarity("hello", " hello ")
-    assert similarity == 0.9  # Whitespace difference gives 0.9 similarity
+    assert similarity == 1.0  # Whitespace difference should match
     
     # Test punctuation differences (should pass in fuzzy mode)
     similarity = matching_assertions._calculate_text_similarity("hello", "hello!")
-    assert similarity == 0.9  # Punctuation difference gives 0.9 similarity
+    assert similarity == 1.0  # Punctuation difference should match
 
 def test_find_best_match_strict(matching_assertions):
     """Test finding best match in strict mode."""
@@ -143,6 +148,8 @@ def test_find_best_match_fuzzy(matching_assertions):
 
 def test_verify_text_match_strict(matching_assertions):
     """Test text matching verification in strict mode."""
+    matching_assertions.set_case_sensitive(True)  # Enable case-sensitive matching
+    
     # Test exact match
     result = matching_assertions._verify_text_match("Hello", "Hello")
     assert result.success is True
@@ -164,6 +171,7 @@ def test_verify_text_match_strict(matching_assertions):
 def test_verify_text_match_fuzzy(matching_assertions):
     """Test text matching verification in fuzzy mode."""
     matching_assertions.enable_fuzzy_matching(0.8)
+    matching_assertions.set_case_sensitive(False)  # Enable case-insensitive matching
     
     # Test exact match
     result = matching_assertions._verify_text_match("Hello", "Hello")
@@ -171,17 +179,17 @@ def test_verify_text_match_fuzzy(matching_assertions):
     assert result.error_code is None
     assert result.metadata["similarity"] == 1.0
     
-    # Test case difference (should pass in fuzzy mode)
+    # Test case difference (should pass in case-insensitive mode)
     result = matching_assertions._verify_text_match("Hello", "hello")
     assert result.success is True
     assert result.error_code is None
-    assert result.metadata["similarity"] == 0.9
+    assert result.metadata["similarity"] == 1.0
     
     # Test custom threshold
-    result = matching_assertions._verify_text_match("Hello", "hello", threshold=0.95)
+    result = matching_assertions._verify_text_match("Hello", "Hallo", threshold=0.95)
     assert result.success is False
     assert result.error_code == "TEXT_MISMATCH"
-    assert result.metadata["similarity"] == 0.9
+    assert result.metadata["similarity"] < 0.95
 
 def test_verify_list_match_strict(matching_assertions):
     """Test list matching verification in strict mode."""
@@ -238,7 +246,6 @@ def test_match_type_enum():
     """Test MatchType enum values and string representation."""
     assert str(MatchType.EXACT) == "exact"
     assert str(MatchType.CONTAINS) == "contains"
-    assert str(MatchType.CASE_INSENSITIVE) == "case_insensitive"
     assert str(MatchType.FUZZY) == "fuzzy"
     assert str(MatchType.NO_MATCH) == "no_match"
 
@@ -257,14 +264,6 @@ def test_match_text_contains(matching_assertions):
     assert result["success"] is True
     assert result["similarity_score"] == 1.0
     assert result["matched_snippet"] == "Hello World"
-
-def test_match_text_case_insensitive(matching_assertions):
-    """Test case-insensitive text matching."""
-    result = matching_assertions.match_text("Hello", "hello")
-    assert result["match_type"] == MatchType.CASE_INSENSITIVE
-    assert result["success"] is True
-    assert result["similarity_score"] == CASE_INSENSITIVE_THRESHOLD
-    assert result["matched_snippet"] == "hello"
 
 def test_match_text_fuzzy(matching_assertions):
     """Test fuzzy text matching."""
@@ -307,8 +306,8 @@ def test_find_best_match(matching_assertions):
     candidates = ["Hello World", "Goodbye", "hello", "Hallo"]
     
     best_match, score = matching_assertions._find_best_match(text, candidates)
-    assert best_match == "hello"  # Case-insensitive match
-    assert score == CASE_INSENSITIVE_THRESHOLD
+    assert best_match == "Hello World"  # Exact match should be preferred
+    assert score == 1.0
 
 def test_find_best_match_no_candidates(matching_assertions):
     """Test finding best match with no candidates."""
@@ -322,9 +321,9 @@ def test_find_best_match_no_candidates(matching_assertions):
 def test_verify_text_match_with_metadata(matching_assertions):
     """Test text match verification with metadata."""
     result = matching_assertions._verify_text_match("Hello", "hello")
-    assert result.metadata["match_type"] == "case_insensitive"
-    assert result.metadata["similarity"] == CASE_INSENSITIVE_THRESHOLD
-    assert result.metadata["normalized_expected"] == "hello"
+    assert result.metadata["match_type"] == "no_match"
+    assert result.metadata["similarity"] < 0.8
+    assert result.metadata["normalized_expected"] == "Hello"
     assert result.metadata["normalized_actual"] == "hello"
 
 def test_verify_list_match_with_metadata(matching_assertions):
@@ -363,4 +362,55 @@ def test_verify_text_match_logging(mock_logger, matching_assertions):
     
     # Verify info/warning logs
     info_warning_calls = [call for call in mock_logger.info.call_args_list + mock_logger.warning.call_args_list if call]
-    assert len(info_warning_calls) > 0 
+    assert len(info_warning_calls) > 0
+
+def test_case_sensitivity(matching_assertions):
+    """Test case sensitivity settings."""
+    # Test default case-sensitive behavior
+    assert matching_assertions._case_sensitive is True
+    
+    # Test case-sensitive matching
+    result = matching_assertions._verify_text_match("Hello", "hello")
+    assert result.success is False
+    assert result.error_code == "TEXT_MISMATCH"
+    
+    # Enable case-insensitive matching
+    matching_assertions.set_case_sensitive(False)
+    assert matching_assertions._case_sensitive is False
+    
+    # Test case-insensitive matching
+    result = matching_assertions._verify_text_match("Hello", "hello")
+    assert result.success is True
+    assert result.error_code is None
+    
+    # Test case-insensitive list matching
+    expected = ["Hello", "World"]
+    actual = ["hello", "world"]
+    result = matching_assertions._verify_list_match(expected, actual)
+    assert result.success is True
+    assert len(result.metadata["matched_items"]) == 2
+    
+    # Switch back to case-sensitive
+    matching_assertions.set_case_sensitive(True)
+    assert matching_assertions._case_sensitive is True
+    
+    # Verify case-sensitive behavior is restored
+    result = matching_assertions._verify_text_match("Hello", "hello")
+    assert result.success is False
+    assert result.error_code == "TEXT_MISMATCH"
+
+def test_normalize_text_case_sensitivity(matching_assertions):
+    """Test text normalization with case sensitivity."""
+    # Test case-sensitive normalization
+    matching_assertions.set_case_sensitive(True)
+    assert matching_assertions._normalize_text("Hello World") == "Hello World"
+    assert matching_assertions._normalize_text("  Hello World  ") == "Hello World"
+    
+    # Test case-insensitive normalization
+    matching_assertions.set_case_sensitive(False)
+    assert matching_assertions._normalize_text("Hello World") == "hello world"
+    assert matching_assertions._normalize_text("  Hello World  ") == "hello world"
+    
+    # Test empty strings
+    assert matching_assertions._normalize_text("") == ""
+    assert matching_assertions._normalize_text(None) == "" 

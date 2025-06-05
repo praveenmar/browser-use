@@ -19,7 +19,6 @@ logger = logging.getLogger("test_framework.validation.assertions")
 
 # Constants for similarity thresholds
 FUZZY_MATCH_THRESHOLD = 0.85
-CASE_INSENSITIVE_THRESHOLD = 1.0
 EXACT_MATCH_THRESHOLD = 1.0
 
 class VerificationAssertions(ExtractionAssertions, MatchingAssertions):
@@ -32,10 +31,9 @@ class VerificationAssertions(ExtractionAssertions, MatchingAssertions):
     - Attribute verification
     
     Each verification method follows a multi-tiered matching strategy:
-    1. Exact match
-    2. Contains match
-    3. Case-insensitive match
-    4. Fuzzy match (if enabled)
+    1. Exact match (case-sensitive)
+    2. Contains match (case-sensitive)
+    3. Fuzzy match (if enabled)
     """
     
     def __init__(self, agent: Agent, result: AgentHistoryList):
@@ -129,7 +127,7 @@ class VerificationAssertions(ExtractionAssertions, MatchingAssertions):
         for expected_text in quoted_texts:
             logger.debug(f"[Step {current_step}] Processing expected text: '{expected_text}'")
             
-            # Use the new match_text method
+            # Use the new match_text method with case-sensitive matching
             match_result = self._matching.match_text(expected_text, extracted_text, use_fuzzy_matching)
             match_result["expected_text"] = expected_text
             results.append(match_result)
@@ -547,4 +545,35 @@ class VerificationAssertions(ExtractionAssertions, MatchingAssertions):
                 message=f"Attribute {attr_name} does not match expected value",
                 error_code="VERIFICATION_FAILED",
                 metadata=metadata
-            ) 
+            )
+
+    async def verify_text(self, expected_text: str, requirement: str, case_sensitive: bool = True) -> Tuple[bool, Optional[str]]:
+        """Verify text content with configurable case sensitivity.
+        
+        Args:
+            expected_text: The expected text to verify
+            requirement: The requirement string
+            case_sensitive: Whether to perform case-sensitive matching (default: True)
+            
+        Returns:
+            Tuple[bool, Optional[str]]: (success, error_message)
+        """
+        logger.debug(f"Verifying text: expected='{expected_text}', case_sensitive={case_sensitive}")
+        
+        # Set case sensitivity for matching
+        self._matching.set_case_sensitive(case_sensitive)
+        
+        # Create a mock action result with the requirement
+        mock_result = ActionResult(
+            success=True,
+            extracted_content=requirement,
+            error=None
+        )
+        
+        # Verify the text
+        result = await self._verify_condition(requirement, 0, use_fuzzy_matching=False)
+        
+        if result.success:
+            return True, None
+        else:
+            return False, result.message 
