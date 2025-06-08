@@ -13,6 +13,8 @@ import asyncio
 from browser_use.agent.views import ActionResult, AgentHistoryList
 from browser_use.agent.service import Agent
 from browser_use.browser.session import BrowserSession
+from playwright.async_api import Page
+from ..utils.visibility_utils import is_element_visible_by_handle, is_element_in_viewport
 
 from .base import BaseAssertions, AssertionResult
 from .matching import MatchingAssertions
@@ -386,124 +388,93 @@ class ExtractionAssertions(BaseAssertions):
         
         Args:
             text: The text to verify
-            requirement: The original requirement string
+            requirement: The requirement being verified
             
         Returns:
             Tuple[bool, Optional[str]]: (success, error_message)
         """
-        # Log step type if not already logged
         try:
-            # Safely get current step number
-            current_step = 0
-            if hasattr(self.result, 'steps'):
-                current_step = len(self.result.steps)
-            elif isinstance(self.result, list):
-                current_step = len(self.result)
-                
-            if current_step not in self._step_types:
-                self._log_step_type(requirement, current_step)
-        except Exception as e:
-            logger.debug(f"Could not log step type: {e}")
+            logger.debug(f"🔍 Starting verification for text: '{text}'")
             
-        # Check if we should skip validation
-        if await self._should_skip_validation(text):
-            logger.debug(f"Skipping validation for '{text}' - already verified in current page state")
-            return True, None
-            
-        # Check if this assertion was already successful
-        if self._was_assertion_successful(text):
-            logger.debug(f"Assertion for text '{text}' was previously successful")
-            return True, None
-            
-        # Clear cache if it's too old
-        if time.time() - self._last_extraction_time > self._extraction_timeout:
-            self.clear_cache()
-            
-        # Try to extract the text
-        result = await self.extract_text(text)
-        if not result:
-            await self._update_validation_context(text, False, "")
-            return False, f"Failed to extract text: {text}"
-            
-        # Check if result indicates presence
-        if isinstance(result, dict) and result.get('present', False):
-            logger.debug(f"Text '{text}' found via presence flag")
-            self._mark_assertion_successful(text)
-            await self._update_validation_context(text, True, text)
-            return True, None
-            
-        # Check if the text was found
-        if isinstance(result, dict):
-            content = result.get('extracted_content', '')
-        else:
-            content = str(result)
-            
-        # Try exact match first
-        if text in content:
-            logger.debug(f"Text '{text}' found via exact match")
-            self._mark_assertion_successful(text)
-            await self._update_validation_context(text, True, content)
-            return True, None
-            
-        # Try fuzzy matching
-        similarity = self._calculate_text_similarity(text, content)
-        if similarity > self._fuzzy_match_threshold:
-            logger.debug(f"Text '{text}' found via fuzzy match (similarity: {similarity})")
-            self._mark_assertion_successful(text)
-            await self._update_validation_context(text, True, content)
-            return True, None
-            
-        # Only scroll if both exact and fuzzy matching failed
-        scroll_attempts = 0
-        while scroll_attempts < self._max_scroll_attempts:
+            # First check if text is already visible in viewport
             try:
-                # Get browser page
                 page = await self._get_browser_page()
-                if not page:
-                    logger.warning("No browser page available for scrolling")
-                    break
-                    
-                logger.debug(f"Text not found in visible area, attempting to scroll (attempt {scroll_attempts + 1})...")
-                await page.evaluate("window.scrollBy(0, 500)")
-                await asyncio.sleep(0.5)  # Wait for scroll to complete
-                
-                # Try extraction again after scroll
-                result = await self.extract_text(text)
-                if result:
-                    # Check if result indicates presence
-                    if isinstance(result, dict) and result.get('present', False):
-                        logger.debug(f"Text '{text}' found via presence flag after scroll")
-                        self._mark_assertion_successful(text)
-                        await self._update_validation_context(text, True, text)
-                        return True, None
+                if page:
+                    # Try to find element with text using browser session
+                    element = await self.browser_session.get_locate_element_by_text(text, nth=0)
+                    if element:
+                        logger.debug("✅ Found element with text")
                         
-                    if isinstance(result, dict):
-                        content = result.get('extracted_content', '')
+                        # Get element position
+                        element_box = await element.bounding_box()
+                        if element_box:
+                            logger.debug(f"📍 Element position - X: {element_box['x']}, Y: {element_box['y']}")
+                        
+                        # Check visibility using browser session
+                        logger.debug("👁️ Checking element visibility...")
+                        is_visible = await self.browser_session.is_visible_by_handle(element)
+                        logger.debug(f"👁️ Element visibility: {is_visible}")
+                        
+                        if is_visible:
+                            logger.debug("✅ Text is visible")
+                            self._mark_assertion_successful(text)
+                            await self._update_validation_context(text, True, text)
+                            return True, None
+                        else:
+                            logger.warning(f"⚠️ Text '{text}' found but not visible")
                     else:
-                        content = str(result)
-                        
-                    if text in content:
-                        logger.debug(f"Text '{text}' found via exact match after scroll")
-                        self._mark_assertion_successful(text)
-                        await self._update_validation_context(text, True, content)
-                        return True, None
-                        
-                    # Try fuzzy matching again
-                    similarity = self._calculate_text_similarity(text, content)
-                    if similarity > self._fuzzy_match_threshold:
-                        logger.debug(f"Text '{text}' found via fuzzy match after scroll (similarity: {similarity})")
-                        self._mark_assertion_successful(text)
-                        await self._update_validation_context(text, True, content)
-                        return True, None
-                        
-                scroll_attempts += 1
+                        logger.warning(f"⚠️ Could not find element with text '{text}'")
             except Exception as e:
-                logger.warning(f"Error during scroll attempt {scroll_attempts + 1}: {e}")
-                break
+                logger.warning(f"⚠️ Error checking text visibility: {e}")
+            
+            # If text is not visible, try scrolling through the page
+            logger.debug("🔄 Starting scroll search for text...")
+            viewport_height = await page.evaluate("window.innerHeight")
+            current_scroll = await page.evaluate("window.scrollY")
+            max_scroll = await page.evaluate("document.body.scrollHeight")
+            
+            while current_scroll < max_scroll:
+                try:
+                    # Scroll down by viewport height
+                    await page.evaluate(f"window.scrollBy(0, {viewport_height})")
+                    await asyncio.sleep(0.5)  # Wait for scroll to complete
+                    current_scroll = await page.evaluate("window.scrollY")
+                    
+                    # Try to find element again after scroll
+                    element = await self.browser_session.get_locate_element_by_text(text, nth=0)
+                    if element:
+                        logger.debug("✅ Found element with text after scroll")
+                        
+                        # Get element position after scroll
+                        element_box = await element.bounding_box()
+                        if element_box:
+                            logger.debug(f"📍 Element position after scroll - X: {element_box['x']}, Y: {element_box['y']}")
+                        
+                        # Check visibility using browser session
+                        logger.debug("👁️ Checking element visibility after scroll...")
+                        is_visible = await self.browser_session.is_visible_by_handle(element)
+                        logger.debug(f"👁️ Element visibility after scroll: {is_visible}")
+                        
+                        if is_visible:
+                            logger.debug("✅ Text is visible after scrolling")
+                            self._mark_assertion_successful(text)
+                            await self._update_validation_context(text, True, text)
+                            return True, None
+                        else:
+                            logger.warning(f"⚠️ Text '{text}' found but not visible after scroll")
+                    else:
+                        logger.debug(f"ℹ️ Text '{text}' not found in current viewport after scroll")
+                        
+                except Exception as e:
+                    logger.error(f"❌ Error checking viewport: {e}")
+                    
+            # If we've scrolled through the entire page and haven't found the text
+            logger.error(f"❌ Text '{text}' found in DOM but not visible in any viewport")
+            return False, f"Text '{text}' found in DOM but not visible in any viewport"
                 
-        # Update validation context with failure
-        await self._update_validation_context(text, False, content)
-        return False, f"Text not found: {text}"
+        except Exception as e:
+            logger.error(f"❌ Error verifying text: {e}")
+            return False, str(e)
         
     def _process_pending_extractions(self, current_step: int, lookahead_window: int = 2) -> None:
         """Process all extractions in current and future steps within lookahead window.

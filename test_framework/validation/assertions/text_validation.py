@@ -25,95 +25,109 @@ class TextValidation:
     """Text validation functionality with configurable case sensitivity"""
     
     @staticmethod
-    def verify_text(
-        action_result: ActionResult,
+    async def verify_text(
+        self,
         expected_text: str,
-        exact: bool = True,
         case_sensitive: bool = True,
-        metadata: Optional[Dict[str, Any]] = None
+        mode: ValidationMode = ValidationMode.EXACT,
+        original_requirement: str = ""
     ) -> AssertionResult:
         """Verify text content with configurable case sensitivity.
         
         Args:
-            action_result: The action result containing the text to verify
-            expected_text: The expected text to match against
-            exact: Whether to require an exact match
+            expected_text: The expected text to verify
             case_sensitive: Whether to perform case-sensitive matching
-            metadata: Additional metadata for the verification
+            mode: The validation mode (EXACT, CONTAINS, or RELAXED)
+            original_requirement: The original requirement text
             
         Returns:
             AssertionResult: Result of the verification
         """
-        logger.debug(f"Verifying text: expected='{expected_text}', exact={exact}, case_sensitive={case_sensitive}")
+        logger.debug(f"🔍 Starting text verification: mode={mode}, case_sensitive={case_sensitive}")
+        logger.debug(f"📝 Expected text: '{expected_text}'")
         
-        if not action_result.success:
-            logger.error(f"Text verification failed: {action_result.error}")
-            return AssertionResult(
-                success=False,
-                error_code="ACTION_FAILED",
-                message=f"Action failed: {action_result.error}",
-                metadata=metadata
+        try:
+            # Get the current page
+            page = self.browser.page
+            if not page:
+                logger.error("❌ No browser page available")
+                return AssertionResult(
+                    success=False,
+                    error_code="NO_PAGE",
+                    message="No browser page available for verification",
+                    metadata={
+                        "expected_text": expected_text,
+                        "mode": mode.value,
+                        "case_sensitive": case_sensitive
+                    }
+                )
+            
+            # Wait for initial DOM stability
+            logger.debug("⏳ Waiting for initial DOM stability...")
+            await self.browser.wait_for_dom_stability()
+            
+            # Get the current page content
+            content = await page.content()
+            if not content:
+                logger.error("❌ No page content available")
+                return AssertionResult(
+                    success=False,
+                    error_code="NO_CONTENT",
+                    message="No page content available for verification",
+                    metadata={
+                        "expected_text": expected_text,
+                        "mode": mode.value,
+                        "case_sensitive": case_sensitive
+                    }
+                )
+            
+            # Use validator to check text
+            logger.debug("🔍 Validating text content...")
+            validation_result = await self.validator.validate_text(
+                expected=expected_text,
+                actual=content,
+                mode=mode,
+                case_sensitive=case_sensitive,
+                original_requirement=original_requirement,
+                page=page,  # Pass the page for basic checks
+                browser_session=self.browser  # Pass the browser session for enhanced checks
             )
             
-        # Handle extracted content safely
-        actual_text = None
-        if action_result.extracted_content:
-            logger.debug(f"Processing extracted content: {action_result.extracted_content}")
-            if isinstance(action_result.extracted_content, dict):
-                logger.debug("Content is a dictionary")
-                actual_text = action_result.extracted_content.get('text', str(action_result.extracted_content))
-            else:
-                try:
-                    data = json.loads(action_result.extracted_content)
-                    logger.debug("Successfully parsed JSON content")
-                    actual_text = data.get('text', action_result.extracted_content)
-                except json.JSONDecodeError:
-                    logger.debug("Using raw string content")
-                    actual_text = action_result.extracted_content
-
-        if not actual_text:
-            logger.error("No text content found")
-            return AssertionResult(
-                success=False,
-                error_code="TEXT_EMPTY",
-                message="No text content found",
-                metadata=metadata
-            )
-            
-        # Use the validator to check the text with configurable case sensitivity
-        mode = ValidationMode.EXACT if exact else ValidationMode.CONTAINS
-        logger.debug(f"Validating text with mode: {mode}, case_sensitive: {case_sensitive}")
-        result = TestValidator.validate_text(
-            expected=expected_text,
-            actual=actual_text,
-            mode=mode,
-            case_sensitive=case_sensitive,
-            original_requirement=metadata.get("requirement", "") if metadata else ""
-        )
-        
-        if not result.success:
-            logger.error(f"Text validation failed: {result.reason}")
-        else:
-            logger.info("Text validation succeeded")
-        
-        # Update metadata with actual values
-        if metadata is None:
-            metadata = {}
-        metadata.update({
-            "expected_text": expected_text,
-            "actual_text": actual_text,
-            "validation_mode": mode.value,
-            "case_sensitive": case_sensitive,
-            "validation_result": {
-                "success": result.success,
-                "error_code": result.error_code,
-                "reason": result.reason
+            # Update metadata with actual values
+            metadata = {
+                "expected_text": expected_text,
+                "actual_text": content,
+                "validation_mode": mode.value,
+                "case_sensitive": case_sensitive,
+                "validation_result": validation_result.metadata
             }
-        })
-        
-        return AssertionResult(
-            success=result.success,
-            error_code=result.error_code,
-            message=result.reason,
-            metadata=metadata
-        ) 
+            
+            if validation_result.success:
+                logger.info(f"✅ Text verification passed: {expected_text}")
+                return AssertionResult(
+                    success=True,
+                    message=f"Text verification passed: {expected_text}",
+                    metadata=metadata
+                )
+            else:
+                logger.warning(f"⚠️ Text verification failed: {validation_result.reason}")
+                return AssertionResult(
+                    success=False,
+                    error_code=validation_result.error_code,
+                    message=validation_result.reason,
+                    metadata=metadata
+                )
+                
+        except Exception as e:
+            logger.error(f"❌ Error during text verification: {str(e)}")
+            return AssertionResult(
+                success=False,
+                error_code="VERIFICATION_ERROR",
+                message=f"Error during text verification: {str(e)}",
+                metadata={
+                    "expected_text": expected_text,
+                    "mode": mode.value,
+                    "case_sensitive": case_sensitive,
+                    "error": str(e)
+                }
+            ) 

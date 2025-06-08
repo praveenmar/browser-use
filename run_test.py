@@ -22,16 +22,16 @@ from test_framework.models.action_model import ActionModel
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
 # Set specific loggers to appropriate levels
-logging.getLogger('controller').setLevel(logging.INFO)  # Keep controller logs
-logging.getLogger('test_framework.validation.assertions').setLevel(logging.INFO)  # Keep validation logs
-logging.getLogger('browser').setLevel(logging.INFO)  # Keep browser logs
-logging.getLogger('agent').setLevel(logging.INFO)  # Keep agent logs
-logging.getLogger('test_framework.agent.step_hooks').setLevel(logging.INFO)
+logging.getLogger('controller').setLevel(logging.DEBUG)
+logging.getLogger('test_framework.validation.assertions').setLevel(logging.DEBUG)
+logging.getLogger('browser').setLevel(logging.DEBUG)
+logging.getLogger('agent').setLevel(logging.DEBUG)
+logging.getLogger('test_framework.agent.step_hooks').setLevel(logging.DEBUG)
 
 # Create a filter to exclude only extraction content
 class ExtractionFilter(logging.Filter):
@@ -45,6 +45,9 @@ class ExtractionFilter(logging.Filter):
 # Apply the filter only to the controller logger
 controller_logger = logging.getLogger('controller')
 controller_logger.addFilter(ExtractionFilter())
+
+# Set environment variable for logging level
+os.environ['BROWSER_USE_LOGGING_LEVEL'] = 'debug'
 
 logger = logging.getLogger(__name__)
 
@@ -174,10 +177,9 @@ async def main():
                 "task": """
                    
                 @agent=keep this in mind that you are testing a website so, follow the instructions carefully do not go beyond the instructions
-                step 1. Navigate to http://uitestingplayground.com/dynamicid
-                step 2. assert that the text 'Then execute your test to make sure that ID is not used for button identification.' is visible
-                step 3. Finally give me a report of the test like what passed and what failed.
-                    
+                step 1. Navigate to https://foxtale.in/
+                step 2. click on the option with the text 'Acne'
+                step 3. assert that the text 'Filters' is present on the left side.
                 """,
                 "assertion_mode": "soft"  # Use soft assertions to continue on failure
             }

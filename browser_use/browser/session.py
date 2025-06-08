@@ -2068,6 +2068,30 @@ class BrowserSession(BaseModel):
 		return not is_hidden and bbox is not None and bbox['width'] > 0 and bbox['height'] > 0
 
 	@require_initialization
+	@time_execution_async('--is_visible_by_handle')
+	async def is_visible_by_handle(self, element: ElementHandle) -> bool:
+		"""
+		Public method to check if an element is visible on the page.
+		Uses browser-use's enhanced visibility checking logic that handles edge cases with CSS frameworks.
+		
+		Args:
+			element: The Playwright ElementHandle to check visibility for
+			
+		Returns:
+			bool: True if the element is visible, False otherwise
+			
+		Example:
+			```python
+			element = await page.query_selector('.my-element')
+			if element:
+				is_visible = await browser_session.is_visible_by_handle(element)
+				if is_visible:
+					# Element is visible and has non-zero dimensions
+			```
+		"""
+		return await self._is_visible(element)
+
+	@require_initialization
 	@time_execution_async('--get_locate_element')
 	async def get_locate_element(self, element: DOMElementNode) -> ElementHandle | None:
 		page = await self.get_current_page()
@@ -2564,3 +2588,10 @@ class BrowserSession(BaseModel):
 			`;
 			document.head.appendChild(style);
 		}""")
+
+	def is_running(self) -> bool:
+		"""
+		Check if the browser session is running.
+		Returns True if the browser session is initialized and connected.
+		"""
+		return self.initialized and self.is_connected()

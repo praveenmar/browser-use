@@ -10,6 +10,9 @@ from pydantic import BaseModel
 import urllib.parse
 import logging
 import re
+import asyncio
+from playwright.async_api import Page
+from browser_use.browser.session import BrowserSession
 
 logger = logging.getLogger("test_framework.validation.validator")
 
@@ -82,14 +85,16 @@ class TestValidator:
         return text
 
     @staticmethod
-    def validate_text(
+    async def validate_text(
         expected: str,
         actual: str,
         mode: ValidationMode = ValidationMode.EXACT,
         case_sensitive: bool = True,
-        original_requirement: str = ""
+        original_requirement: str = "",
+        page: Optional[Page] = None,
+        browser_session: Optional[BrowserSession] = None
     ) -> ValidationResult:
-        """Validate text content with configurable case sensitivity.
+        """Validate text content with configurable case sensitivity and visibility checks.
         
         Args:
             expected: The expected text
@@ -97,13 +102,15 @@ class TestValidator:
             mode: The validation mode
             case_sensitive: Whether to perform case-sensitive matching
             original_requirement: The original requirement text
+            page: Optional browser page for basic visibility checks
+            browser_session: Optional browser session for enhanced visibility checks
             
         Returns:
             ValidationResult: Result of the validation
         """
-        logger.debug(f"Validating text: mode={mode}, case_sensitive={case_sensitive}")
-        logger.debug(f"Expected: '{expected}'")
-        logger.debug(f"Actual: '{actual}'")
+        logger.debug(f"🔍 Validating text: mode={mode}, case_sensitive={case_sensitive}")
+        logger.debug(f"📝 Expected: '{expected}'")
+        logger.debug(f"📝 Actual: '{actual}'")
         
         if not expected or not actual:
             return ValidationResult(
@@ -117,13 +124,65 @@ class TestValidator:
                     "case_sensitive": case_sensitive
                 }
             )
-            
+
+        # If browser session is provided, use enhanced visibility checks
+        if browser_session:
+            try:
+                logger.debug("🔍 Using enhanced visibility checks with browser session...")
+                # Try to find element with exact text
+                element = await browser_session.get_locate_element_by_text(expected, nth=0)
+                if element:
+                    logger.debug("✅ Found element with text")
+                    
+                    # Get element position
+                    element_box = await element.bounding_box()
+                    if element_box:
+                        logger.debug(f"📍 Element position - X: {element_box['x']}, Y: {element_box['y']}")
+                    
+                    # Check visibility using browser session
+                    logger.debug("👁️ Checking element visibility...")
+                    is_visible = await browser_session.is_visible_by_handle(element)
+                    logger.debug(f"👁️ Element visibility: {is_visible}")
+                    
+                    if not is_visible:
+                        return ValidationResult(
+                            success=False,
+                            error_code="TEXT_NOT_VISIBLE",
+                            reason="Text found but not visible",
+                            metadata={
+                                "expected": expected,
+                                "actual": actual,
+                                "mode": mode.value,
+                                "case_sensitive": case_sensitive,
+                                "visibility": {
+                                    "is_visible": is_visible,
+                                    "position": element_box
+                                }
+                            }
+                        )
+                else:
+                    logger.debug("❌ Element with text not found in page")
+                    return ValidationResult(
+                        success=False,
+                        error_code="TEXT_NOT_FOUND",
+                        reason="Text not found in page",
+                        metadata={
+                            "expected": expected,
+                            "actual": actual,
+                            "mode": mode.value,
+                            "case_sensitive": case_sensitive
+                        }
+                    )
+            except Exception as e:
+                logger.warning(f"⚠️ Error checking text visibility: {e}")
+                # Continue with text validation even if visibility check fails
+                
         # Normalize texts based on mode and case sensitivity
         expected_norm = TestValidator.normalize_text(expected, mode, case_sensitive)
         actual_norm = TestValidator.normalize_text(actual, mode, case_sensitive)
         
-        logger.debug(f"Normalized expected: '{expected_norm}'")
-        logger.debug(f"Normalized actual: '{actual_norm}'")
+        logger.debug(f"📝 Normalized expected: '{expected_norm}'")
+        logger.debug(f"📝 Normalized actual: '{actual_norm}'")
         
         # Perform validation based on mode
         if mode == ValidationMode.EXACT:

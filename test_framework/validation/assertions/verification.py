@@ -7,9 +7,14 @@ import logging
 from typing import Optional, Dict, Any, List, Tuple, Union
 import re
 from difflib import SequenceMatcher
+import asyncio
+import time
 
 from browser_use.agent.views import ActionResult, AgentHistoryList
 from browser_use.agent.service import Agent
+from browser_use.browser.session import BrowserSession
+from playwright.async_api import Page
+from ..utils.visibility_utils import is_element_visible_by_handle, is_element_in_viewport
 
 from .base import BaseAssertions, AssertionResult, AssertionType
 from .extraction import ExtractionAssertions
@@ -45,6 +50,12 @@ class VerificationAssertions(ExtractionAssertions, MatchingAssertions):
         """
         super().__init__(agent, result)
         self._matching = MatchingAssertions(agent, result)
+        self.browser_session = None
+        
+        # Initialize browser session
+        if hasattr(agent, 'browser_session'):
+            self.browser_session = agent.browser_session
+            logger.debug(f"Initialized browser session: {type(self.browser_session)}")
         
     async def verify_requirement(self, requirement: str, step_number: int) -> AssertionResult:
         """Verify a test requirement.
@@ -547,33 +558,298 @@ class VerificationAssertions(ExtractionAssertions, MatchingAssertions):
                 metadata=metadata
             )
 
-    async def verify_text(self, expected_text: str, requirement: str, case_sensitive: bool = True) -> Tuple[bool, Optional[str]]:
-        """Verify text content with configurable case sensitivity.
+    async def _get_browser_page(self) -> Optional[Page]:
+        """Get the browser page safely.
+        
+        Returns:
+            Optional[Page]: The browser page if available, None otherwise
+        """
+        try:
+            if self.browser_session:
+                return await self.browser_session.get_current_page()
+            return None
+        except Exception as e:
+            logger.warning(f"Error getting browser page: {e}")
+            return None
+            
+    async def _wait_for_dom_stability(self, page: Page, timeout: float = 30.0) -> bool:
+        """Wait for the DOM to be stable before running assertions.
         
         Args:
-            expected_text: The expected text to verify
-            requirement: The requirement string
-            case_sensitive: Whether to perform case-sensitive matching (default: True)
+            page: The browser page
+            timeout: Maximum time to wait in seconds
+            
+        Returns:
+            bool: True if DOM is stable, False if timed out
+        """
+        try:
+            logger.debug("Waiting for DOM stability...")
+            start_time = time.time()
+            
+            # Wait for network idle state
+            try:
+                await page.wait_for_load_state('networkidle', timeout=timeout * 1000)
+                logger.debug("Network is idle")
+            except Exception as e:
+                logger.warning(f"Network idle timeout: {e}")
+                
+            # Check if we've exceeded the timeout
+            if time.time() - start_time > timeout:
+                logger.warning(f"DOM stability timeout after {timeout}s")
+                return False
+                
+            logger.debug("DOM is stable")
+            return True
+            
+        except Exception as e:
+            logger.warning(f"Error waiting for DOM stability: {e}")
+            return False
+            
+    async def verify_text(self, action_result: ActionResult, expected_text: str) -> Tuple[bool, Optional[str]]:
+        """Verify text content matches expected value.
+        
+        Args:
+            action_result: The action result to verify
+            expected_text: The expected text to find
             
         Returns:
             Tuple[bool, Optional[str]]: (success, error_message)
         """
-        logger.debug(f"Verifying text: expected='{expected_text}', case_sensitive={case_sensitive}")
+        try:
+            logger.debug(f"🔍 Starting verification for text: '{expected_text}'")
+            
+            page = await self._get_browser_page()
+            if not page:
+                logger.error("❌ No browser page available")
+                return False, "No browser page available"
+                
+            # Wait for initial DOM stability
+            logger.debug("⏳ Waiting for initial DOM stability...")
+            try:
+                await page.wait_for_load_state('networkidle', timeout=5000)
+                logger.debug("✅ Initial DOM stability achieved")
+            except Exception as e:
+                logger.warning(f"⚠️ Initial DOM stability timeout: {e}")
+                
+            # First check if text exists in DOM
+            logger.debug("📄 Checking DOM content...")
+            content = await page.content()
+            if expected_text not in content:
+                # Check if this is a continuation of a previous search
+                if hasattr(self, '_previous_search_text') and self._previous_search_text == expected_text:
+                    logger.debug("🔄 Continuing previous text search...")
+                    # Don't fail immediately, let the agent continue searching
+                    return False, f"Text '{expected_text}' not found in DOM, continuing search"
+                else:
+                    logger.error(f"❌ Text '{expected_text}' not found in DOM")
+                    return False, f"Text '{expected_text}' not found in DOM"
+            logger.debug(f"✅ Text '{expected_text}' found in DOM")
+            
+            # Store the current search text for continuation checks
+            self._previous_search_text = expected_text
+            
+            # Wait for any ongoing scrolling to complete
+            logger.debug("⏳ Waiting for any ongoing scrolling to complete...")
+            try:
+                await page.wait_for_load_state('networkidle', timeout=2000)
+                await asyncio.sleep(0.5)  # Additional small wait for any animations
+            except Exception:
+                pass  # Ignore timeout, continue with verification
+            
+            # Try to find element with text using browser session
+            try:
+                element = await self.browser_session.get_locate_element_by_text(expected_text, nth=0)
+                if element:
+                    logger.debug("✅ Found element with text")
+                    
+                    # Get element position
+                    element_box = await element.bounding_box()
+                    if element_box:
+                        logger.debug(f"📍 Element position - X: {element_box['x']}, Y: {element_box['y']}")
+                    
+                    # Check visibility using browser session
+                    logger.debug("👁️ Checking element visibility...")
+                    is_visible = await self.browser_session.is_visible_by_handle(element)
+                    logger.debug(f"👁️ Element visibility: {is_visible}")
+                    
+                    if is_visible:
+                        # Double check if element is actually in viewport
+                        is_in_viewport = await page.evaluate("""
+                            (element) => {
+                                const rect = element.getBoundingClientRect();
+                                return (
+                                    rect.top >= 0 &&
+                                    rect.left >= 0 &&
+                                    rect.bottom <= window.innerHeight &&
+                                    rect.right <= window.innerWidth
+                                );
+                            }
+                        """, element)
+                        
+                        if is_in_viewport:
+                            logger.debug("✅ Text is visible and in viewport")
+                            # Clear the previous search text since we found it
+                            self._previous_search_text = None
+                            return True, None
+                        else:
+                            logger.warning(f"⚠️ Text '{expected_text}' found but not in viewport")
+                            # If element is not in viewport, scroll to it
+                            try:
+                                await element.scroll_into_view_if_needed()
+                                await asyncio.sleep(0.5)  # Wait for scroll to complete
+                                # Check visibility again after scrolling
+                                is_visible = await self.browser_session.is_visible_by_handle(element)
+                                if is_visible:
+                                    logger.debug("✅ Text is visible after scrolling to it")
+                                    # Clear the previous search text since we found it
+                                    self._previous_search_text = None
+                                    return True, None
+                            except Exception as e:
+                                logger.warning(f"⚠️ Error scrolling to element: {e}")
+                            # Don't fail immediately, let the agent continue searching
+                            return False, f"Text '{expected_text}' found but not in viewport, continuing search"
+                    else:
+                        logger.warning(f"⚠️ Text '{expected_text}' found but not visible")
+                        # Don't fail immediately, let the agent continue searching
+                        return False, f"Text '{expected_text}' found but not visible, continuing search"
+                else:
+                    logger.warning(f"⚠️ Could not find element with text '{expected_text}'")
+                    # Don't fail immediately, let the agent continue searching
+                    return False, f"Could not find element with text '{expected_text}', continuing search"
+            except Exception as e:
+                logger.warning(f"⚠️ Error checking text visibility: {e}")
+                return False, f"Error checking text visibility: {e}, continuing search"
+            
+            # If text is not visible, try scrolling through the page
+            logger.debug("🔄 Starting scroll search for text...")
+            viewport_height = await page.evaluate("window.innerHeight")
+            current_scroll = await page.evaluate("window.scrollY")
+            max_scroll = await page.evaluate("document.body.scrollHeight")
+            
+            # First scroll to top
+            await page.evaluate("window.scrollTo(0, 0)")
+            await asyncio.sleep(0.5)
+            
+            # Scroll in smaller increments for more thorough search
+            scroll_increment = viewport_height // 8  # Eighth of viewport height for more precise scrolling
+            while current_scroll < max_scroll:
+                try:
+                    # Scroll down by increment
+                    await page.evaluate(f"window.scrollBy(0, {scroll_increment})")
+                    await asyncio.sleep(0.3)  # Shorter wait time between smaller scrolls
+                    
+                    # Wait for any dynamic content to load
+                    try:
+                        await page.wait_for_load_state('networkidle', timeout=1000)
+                    except Exception:
+                        pass  # Ignore timeout, continue with verification
+                        
+                    current_scroll = await page.evaluate("window.scrollY")
+                    
+                    # Try to find element again after scroll
+                    element = await self.browser_session.get_locate_element_by_text(expected_text, nth=0)
+                    if element:
+                        logger.debug("✅ Found element with text after scroll")
+                        
+                        # Get element position after scroll
+                        element_box = await element.bounding_box()
+                        if element_box:
+                            logger.debug(f"📍 Element position after scroll - X: {element_box['x']}, Y: {element_box['y']}")
+                        
+                        # Check visibility using browser session
+                        logger.debug("👁️ Checking element visibility after scroll...")
+                        is_visible = await self.browser_session.is_visible_by_handle(element)
+                        logger.debug(f"👁️ Element visibility after scroll: {is_visible}")
+                        
+                        if is_visible:
+                            # Double check if element is actually in viewport after scroll
+                            is_in_viewport = await page.evaluate("""
+                                (element) => {
+                                    const rect = element.getBoundingClientRect();
+                                    return (
+                                        rect.top >= 0 &&
+                                        rect.left >= 0 &&
+                                        rect.bottom <= window.innerHeight &&
+                                        rect.right <= window.innerWidth
+                                    );
+                                }
+                            """, element)
+                            
+                            if is_in_viewport:
+                                logger.debug("✅ Text is visible and in viewport after scrolling")
+                                # Clear the previous search text since we found it
+                                self._previous_search_text = None
+                                return True, None
+                            else:
+                                logger.warning(f"⚠️ Text '{expected_text}' found but not in viewport after scroll")
+                        else:
+                            logger.warning(f"⚠️ Text '{expected_text}' found but not visible after scroll")
+                    else:
+                        logger.debug(f"ℹ️ Text '{expected_text}' not found in current viewport after scroll")
+                        
+                except Exception as e:
+                    logger.error(f"❌ Error checking viewport: {e}")
+                    
+            # If we've scrolled through the entire page and haven't found the text
+            logger.error(f"❌ Text '{expected_text}' found in DOM but not visible in any viewport")
+            return False, f"Text '{expected_text}' found in DOM but not visible in any viewport"
+            
+        except Exception as e:
+            logger.error(f"❌ Error in verification: {e}")
+            return False, str(e)
+
+    async def verify_link(self, action_result: ActionResult, expected_text: str, expected_href: Optional[str] = None) -> Tuple[bool, Optional[str]]:
+        """Verify link content and href match expected values.
         
-        # Set case sensitivity for matching
-        self._matching.set_case_sensitive(case_sensitive)
-        
-        # Create a mock action result with the requirement
-        mock_result = ActionResult(
-            success=True,
-            extracted_content=requirement,
-            error=None
-        )
-        
-        # Verify the text
-        result = await self._verify_condition(requirement, 0, use_fuzzy_matching=False)
-        
-        if result.success:
-            return True, None
-        else:
-            return False, result.message 
+        Args:
+            action_result: The action result to verify
+            expected_text: The expected link text
+            expected_href: Optional expected href value
+            
+        Returns:
+            Tuple[bool, Optional[str]]: (success, error_message)
+        """
+        try:
+            page = await self._get_browser_page()
+            if not page:
+                return False, "No browser page available"
+                
+            # Wait for DOM stability with a shorter timeout
+            await self._wait_for_dom_stability(page, timeout=10.0)
+                
+            # Try to find the link
+            element = await page.get_by_role("link", name=expected_text).first
+            if not element:
+                return False, f"Link with text '{expected_text}' not found"
+                
+            # Scroll element into view first
+            await element.scroll_into_view_if_needed()
+            await asyncio.sleep(0.5)  # Wait for scroll to complete
+            
+            element_handle = await element.element_handle()
+            if element_handle:
+                # Check visibility using browser-use's utility
+                is_visible = await is_element_visible_by_handle(element_handle, self.browser_session)
+                if is_visible:
+                    # Check if element is in viewport
+                    is_in_viewport = await is_element_in_viewport(element_handle, page)
+                    if is_in_viewport:
+                        # Check href if provided
+                        if expected_href:
+                            href = await element.get_attribute("href")
+                            if href != expected_href:
+                                return False, f"Link href '{href}' does not match expected '{expected_href}'"
+                        logger.info(f"✅ Link '{expected_text}' is visible in viewport")
+                        return True, None
+                    else:
+                        logger.warning(f"Link '{expected_text}' found but not in viewport")
+                        return False, f"Link '{expected_text}' found but not visible in viewport"
+                else:
+                    logger.warning(f"Link '{expected_text}' found but not visible")
+                    return False, f"Link '{expected_text}' found but not visible"
+                    
+            return False, f"Link with text '{expected_text}' not found"
+            
+        except Exception as e:
+            logger.error(f"Error verifying link: {e}")
+            return False, str(e) 

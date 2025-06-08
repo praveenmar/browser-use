@@ -5,11 +5,13 @@ This controller provides test-specific actions for extraction.
 
 import logging
 import json
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from browser_use.browser.context import BrowserContext
 from browser_use.browser.session import BrowserSession
 from browser_use.controller.service import Controller
 from browser_use.agent.views import ActionResult
+from playwright.async_api import Locator, Page
+from ..utils.visibility_utils import is_element_visible_by_handle
 
 logger = logging.getLogger("test_framework.validation.controller")
 
@@ -33,7 +35,7 @@ class TestController(Controller):
                 page = await browser_session.get_current_page()
                 locator = page.locator(params['selector'])
                 
-                is_visible = await locator.is_visible(timeout=params.get('timeout', 5000))
+                is_visible = await is_element_visible_by_handle(locator, browser_session)
                 if not is_visible:
                     return ActionResult(
                         success=False,
@@ -70,7 +72,7 @@ class TestController(Controller):
                 page = await browser_session.get_current_page()
                 locator = page.locator(params['selector'])
                 
-                is_visible = await locator.is_visible(timeout=params.get('timeout', 5000))
+                is_visible = await is_element_visible_by_handle(locator, browser_session)
                 if not is_visible:
                     return ActionResult(
                         success=False,
@@ -110,7 +112,7 @@ class TestController(Controller):
                 page = await browser_session.get_current_page()
                 locator = page.locator(params['selector'])
                 
-                is_visible = await locator.is_visible(timeout=params.get('timeout', 5000))
+                is_visible = await is_element_visible_by_handle(locator, browser_session)
                 if not is_visible:
                     return ActionResult(
                         success=False,
@@ -134,6 +136,44 @@ class TestController(Controller):
                 )
             except Exception as e:
                 logger.error(f"Error extracting attribute: {str(e)}")
+                return ActionResult(
+                    success=False,
+                    error=str(e)
+                )
+
+        @self.action(
+            'Extract element from the page',
+            param_model=Dict[str, Any]
+        )
+        async def extract_element(params: Dict[str, Any], browser_session: BrowserSession) -> ActionResult:
+            """Extract element from the page"""
+            try:
+                page = await browser_session.get_current_page()
+                locator = page.locator(params['selector'])
+                
+                is_visible = await is_element_visible_by_handle(locator, browser_session)
+                if not is_visible:
+                    return ActionResult(
+                        success=False,
+                        error=f"Element with selector '{params['selector']}' not found or not visible"
+                    )
+
+                element = await locator.element_handle()
+                if element:
+                    return ActionResult(
+                        success=True,
+                        extracted_content=json.dumps({
+                            "success": True,
+                            "element": element,
+                            "is_visible": is_visible,
+                        })
+                    )
+                return ActionResult(
+                    success=False,
+                    error="Element not found"
+                )
+            except Exception as e:
+                logger.error(f"Error extracting element: {str(e)}")
                 return ActionResult(
                     success=False,
                     error=str(e)

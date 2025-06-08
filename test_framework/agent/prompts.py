@@ -9,9 +9,12 @@ class TestAgentPrompt(SystemPrompt):
                 - verify_link: Verify a link with specific href is present""",
             extend_system_message="""Important rules:
                 1. Use verify_text and verify_link actions directly for assertions
-                2. Execute steps in order
+                2. Execute steps in order exactly as written
                 3. Report any failures immediately
                 4. Do not modify or reinterpret requirements
+                5. Do not add extra steps or actions not specified in the test
+                6. Do not try to find alternative paths or solutions
+                7. If a step fails, report the failure and stop - do not try to work around it
                 
                 Example usage:
                 For text verification: {"verify_text": {"text": "Expected text", "original_requirement": "assert the text is present"}}
